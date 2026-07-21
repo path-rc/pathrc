@@ -27,28 +27,28 @@ jobs:
         id: version
         uses: tomerfi/version-bumper-action@2.0.8
 
-  changelog:
-    outputs:
-      changelog: ${{ steps.changelog.outputs.changelog }}
-    name: Generate changelog
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
-      - name: Generate changelog
-        id: changelog
-        uses: orhun/git-cliff-action@v4
-        with:
-          config: cliff.toml
-          args: --verbose
-        env:
-          OUTPUT: CHANGELOG.md
-          GITHUB_REPO: ${{ github.repository }}
+  changelog:
+      name: Generate changelog
+      runs-on: ubuntu-latest
+      outputs:
+        release_body: ${{ steps.git-cliff.outputs.content }}
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v6
+          with:
+            fetch-depth: 0
+
+        - name: Generate a changelog
+          uses: orhun/git-cliff-action@v4
+          id: git-cliff
+          with:
+            config: cliff.toml
+            args: -vv --latest --strip header
+          env:
+            OUTPUT: CHANGES.md
+            GITHUB_REPO: ${{ github.repository }}
+
 
 
   build:
@@ -97,7 +97,7 @@ jobs:
           archive: "true"
           locked: "true"
           checksum: "sha256,sha512"
-          changelog: ${{ needs.changelog.outputs.changelog}}
+          changelog: ${{ needs.changelog.outputs.release_body }}
 
       - uses: actions/upload-artifact@v7
         with:
