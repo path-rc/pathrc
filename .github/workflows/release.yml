@@ -28,6 +28,8 @@ jobs:
         uses: tomerfi/version-bumper-action@2.0.8
 
   changelog:
+    outputs:
+      changelog: ${{ steps.changelog.outputs.changelog }}
     name: Generate changelog
     runs-on: ubuntu-latest
     permissions:
@@ -39,6 +41,7 @@ jobs:
           fetch-depth: 0
 
       - name: Generate changelog
+        id: changelog
         uses: orhun/git-cliff-action@v4
         with:
           config: cliff.toml
@@ -94,7 +97,7 @@ jobs:
           archive: "true"
           locked: "true"
           checksum: "sha256,sha512"
-          changelog: "CHANGELOG.md"
+          changelog: ${{ needs.changelog.outputs.changelog}}
 
       - uses: actions/upload-artifact@v7
         with:
