@@ -27,6 +27,9 @@ jobs:
         id: version
         uses: tomerfi/version-bumper-action@2.0.8
 
+      - name: Create Tag
+        run : git tag ${{ steps.version.outputs.version }} -a -m "Release ${{ steps.version.outputs.version }}"
+
 
   validate:
     runs-on: ubuntu-22.04
