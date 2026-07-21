@@ -1,0 +1,106 @@
+name: Build Release Binaries
+
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+      - "**"
+      - "!docs/**"
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    outputs:
+      next: ${{ steps.version.outputs.version }}
+    name: Determine next version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        uses: tomerfi/version-bumper-action@2.0.8
+
+  changelog:
+    name: Generate changelog
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --verbose
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+
+
+  build:
+    name: Build ${{ matrix.name }} Release Binaries
+    runs-on: ${{ matrix.os }}
+    env:
+      version: ${{ needs.version.outputs.next }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "macos-intel"
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive_suffix: macos-intel
+
+          - name: "macos-m1"
+            os: macos-14
+            target: aarch64-apple-darwin
+            archive_suffix: macos-m1
+
+          - name: "macos-m2"
+            os: macos-14
+            target: aarch64-apple-darwin
+            archive_suffix: macos-m2
+
+          - name: "linux-amd64"
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive_suffix: linux-amd64
+
+          - name: "linux-arm64"
+            os: ubuntu-24.04
+            target: aarch64-unknown-linux-gnu
+            archive_suffix: linux-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - run: rustup toolchain install stable --profile minimal
+      - uses: michaelklishin/rust-build-package-release-action@v2
+        id: build
+        with:
+          command: release
+          version: ${{ needs.version.outputs.next }}
+          target: ${{ matrix.target }}
+          archive: "true"
+          locked: "true"
+          checksum: "sha256,sha512"
+          changelog: "CHANGELOG.md"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/pathrc
+            target/${{ matrix.target }}/release/pathrc.tar.gz
+            target/${{ matrix.target }}/release/pathrc.tar.gz.sha256
+            target/${{ matrix.target }}/release/pathrc.tar.gz.sha512

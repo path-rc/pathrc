@@ -1,0 +1,18 @@
+[package]
+name = "pathrc"
+authors = ["github.com/mrdoodles"]
+version = "0.0.1"
+repository = "https://github.com/pathrc/pathrc"
+readme = "README.md"
+keywords = ["pathrc", "cli", "utility", "linux", "mac"]
+categories = ["command-line-utilities"]
+license = "BSD-3"
+edition = "2021"
+description = "Command line utility to provide per path configurations for aliases, environment variables and functions"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.5.4", features = ["cargo", "derive", "env"] }
+envmnt = "0.10.4"
+rust-embed = "8.3.0"
