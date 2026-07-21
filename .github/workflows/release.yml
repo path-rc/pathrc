@@ -27,6 +27,14 @@ jobs:
         id: version
         uses: tomerfi/version-bumper-action@2.0.8
 
+      - name: Create tag
+        uses: anothrNick/github-tag-action@v1.38.0
+        with:
+          tag_prefix: ""
+          release_branches: main
+          create_annotated_tag: true
+          tag_message: "Release ${{ steps.version.outputs.version }}"
+
 
   validate:
     runs-on: ubuntu-22.04
