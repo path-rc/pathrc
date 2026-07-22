@@ -12,20 +12,52 @@ permissions:
   contents: write
 
 jobs:
-  tag:
+  release-tag:
+    permissions:
+      # create tag
+      contents: write
     runs-on: ubuntu-latest
+    outputs:
+      new-tag: ${{ steps.ccv.outputs.new-tag }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - id: semvertag
-        uses: modern-python/semvertag@v0
-        with:
-          strategy: conventional-commits
-      - if: steps.semvertag.outputs.status == 'created'
-        run: |
-            echo "tagged ${{ steps.semvertag.outputs.tag }}"
-            echo "bump=${{ steps.semvertag.outputs.bump }}"
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        fetch-depth: 0
+    - name: Bump tag if necessary
+      id: ccv
+      uses: smlx/ccv@7318e2f25a52dcd550e75384b84983973251a1f8 # v0.10.0
+
+#   tag:
+#     runs-on: ubuntu-latest
+
+
+# # runs-on: ubuntu-22.04
+#     permissions:
+#       contents: write
+#     steps:
+#     - uses: actions/checkout@v6
+#       with:
+#         fetch-depth: '0'
+
+#     - name: Bump version and push tag
+#       uses: anothrNick/github-tag-action@v1 # Don't use @master or @v1 unless you're happy to test the latest version
+#       env:
+#         GITHUB_TOKEN: ${{ secrets.MRD_PAT }} # if you don't want to set write permissions use a PAT token
+
+
+
+    # steps:
+    #   - uses: actions/checkout@v6
+    #     with:
+    #       fetch-depth: 0
+    #   - id: semvertag
+    #     uses: modern-python/semvertag@v0
+    #     with:
+    #       strategy: conventional-commits
+    #   - if: steps.semvertag.outputs.status == 'created'
+    #     run: |
+    #         echo "tagged ${{ steps.semvertag.outputs.tag }}"
+    #         echo "bump=${{ steps.semvertag.outputs.bump }}"
 
 
       # - uses: actions/setup-python@v5
