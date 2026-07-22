@@ -1,0 +1,130 @@
+:root {
+  --bg: #f8f7f2;
+  --panel: #ffffff;
+  --text: #1f2430;
+  --accent: #1f6feb;
+  --accent-strong: #0f4db8;
+  --muted: #5a6272;
+  --border: #d8dce5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: "Avenir Next", "Helvetica Neue", Helvetica, sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 10% 10%, #e8f0ff 0, transparent 35%),
+    radial-gradient(circle at 90% 20%, #ffe9d3 0, transparent 30%),
+    var(--bg);
+}
+
+.hero {
+  padding: 5rem 1.25rem 3rem;
+}
+
+.hero-inner {
+  max-width: 900px;
+  margin: 0 auto;
+  background: linear-gradient(120deg, #ffffff 0%, #f2f6ff 100%);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 2rem;
+  box-shadow: 0 8px 30px rgba(31, 36, 48, 0.08);
+}
+
+.logo-wrap {
+  min-height: 48px;
+}
+
+.logo {
+  max-height: 105px;
+  width: auto;
+}
+
+h1 {
+  display: none;
+  margin: 0.75rem 0 0.5rem;
+  font-size: clamp(2.2rem, 4vw, 3.5rem);
+  letter-spacing: 0.01em;
+}
+
+.tagline {
+  font-size: 1.1rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.cta {
+  display: inline-block;
+  margin-top: 1.4rem;
+  text-decoration: none;
+  color: #fff;
+  background: var(--accent);
+  padding: 0.7rem 1rem;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.cta:hover {
+  background: var(--accent-strong);
+}
+
+.content {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 1.25rem 3rem;
+}
+
+section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.2rem 1.2rem 1.4rem;
+  margin-bottom: 1rem;
+}
+
+h2 {
+  margin: 0.2rem 0 0.5rem;
+}
+
+p {
+  line-height: 1.6;
+}
+
+pre {
+  background: #1e2230;
+  color: #e6edf3;
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  font-size: 0.93rem;
+  margin: 0.6rem 0 1rem;
+}
+
+pre code {
+  background: none;
+  color: inherit;
+  padding: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+code {
+  background: #eef0f5;
+  border-radius: 5px;
+  padding: 0.15em 0.4em;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.footer {
+  text-align: center;
+  color: var(--muted);
+  padding: 0 1.25rem 2.2rem;
+  font-size: 0.95rem;
+}
