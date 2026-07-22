@@ -1,0 +1,94 @@
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pathrc</title>
+  <meta name="description" content="pathrc: per-directory logical project partitioning and more">
+  <link rel="stylesheet" href="assets/css/style.css">
+</head>
+
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="logo-wrap">
+        <img src="assets/logo/pathrc-logo.svg" alt="pathrc logo" class="logo"
+          onerror="this.style.display='none';document.querySelector('h1').style.display=''">
+      </div>
+      <h1>pathrc</h1>
+      <!-- <p class="tagline">Logical project partitioning and more...</p> -->
+      <a class="cta" href="https://github.com/pathrc/pathrc">View on GitHub</a>
+    </div>
+  </header>
+  <main class="content">
+    <section>
+      <h2>About</h2>
+      <p style="left:NaNpx;"><b>PathRC</b> is a command-line tool for UNIX and Linux enabling per-directory management
+        of
+        environment variables, aliases and shell functions which enables the automaic switching as the filesystem is
+        traversed so
+        that a configuration for project A will not be accidentally used for project B.<br />
+
+      <h3>How it works</h3>
+      <p style="left:NaNpx;"><b>PathRC</b> gets initialised in the users shell RC file when a new shell is started
+        (currently Bash, Zsh and the Fish shell are supported).</p>
+      When a change in directory is detected, PathRC will look for a configuration file in the current directory
+      and all parent directories up to the starting directory (typically the user's home directory).
+      Next the configuration files are collated in reverse order and finally evaluated into the shell.
+      As the configurations are evaluated into the shell and collated at the current directory the configuration is
+      inherited as
+      the user navigates down the filesystem.
+
+      <br />To have configurations cleared in a higher directory simply add a configuration file to unset it.
+
+      <br />
+      <p style="left:NaNpx;">
+        The configuration files can be shared across common shells i.e. Bash and Zsh or can be shell specific.<br />
+      </p>
+
+      <h3>Examples of Usage</h3>
+      <p style="left:NaNpx;">
+
+        setting AWS_CONFIG_FILE environment variable to a project specific configuration file<br />
+        setting git credentials for a specific project<br />
+        setting auth credentials for online services<br />
+        setting software development environment variables for a specific project<br />
+      </p>
+
+
+      <h3>Windows Support</h3>
+      <p style="left:NaNpx;">As PathRC only manages Shell Environment Variables, Functions and Aliases
+        it should also work under windows via the use of <b>CygWin</b> or the Windows subsystem for Linux <b>WSL</b>
+      </p>
+    </section>
+
+
+    </section>
+    <section>
+      <h2>Install</h2>
+      <p>Install the latest release for your platform with one command:</p>
+      <pre>
+<code> </code>
+                </pre>
+      <p>
+        The script auto-detects your OS and architecture (macOS Intel, Apple Silicon, Linux amd64/arm64), downloads the
+        matching release archive, verifies its SHA-256 checksum, and
+        installs<code>pathrc</code>to<code>/usr/local/bin</code>.
+      </p>
+      <p>To install a specific version:</p>
+      <pre>
+<code></code>
+                </pre>
+      <p>
+        Optional
+        overrides:<code>PATHRC_INSTALL_DIR</code>(default<code>/usr/local/bin</code>),<code>PATHRC_VERSION</code>(default
+        latest).
+      </p>
+    </section>
+  </main>
+  <footer class="footer">
+    <p>BSD-3 Licensed • pathrc</p>
+  </footer>
+</body>
+
+</html>

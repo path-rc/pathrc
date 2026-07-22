@@ -12,156 +12,176 @@ permissions:
   contents: write
 
 jobs:
-  version:
-    outputs:
-      next: ${{ steps.version.outputs.version }}
-    name: Determine next version
+  tag:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
-      - name: Get version
-        id: version
-        uses: tomerfi/version-bumper-action@2.0.8
-
-      - name: Create tag
-        uses: anothrNick/github-tag-action@v1.38.0
+      - id: semvertag
+        uses: modern-python/semvertag@v0
         with:
-          tag_prefix: ""
-          release_branches: main
-          create_annotated_tag: true
-          tag_message: "Release ${{ steps.version.outputs.version }}"
+          strategy: conventional-commits
+      - if: steps.semvertag.outputs.status == 'created'
+        run: |
+            echo "tagged ${{ steps.semvertag.outputs.tag }}"
+            echo "bump=${{ steps.semvertag.outputs.bump }}"
 
 
-  validate:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 5
-    outputs:
-      version: ${{ steps.validate.outputs.version }}
-    steps:
-      - uses: actions/checkout@v6
+      # - uses: actions/setup-python@v5
+      #   with:
+      #     python-version: "3.13"
+      # - run: pip install --quiet --no-cache-dir 'uv>=0.4,<1'
 
-      - uses: michaelklishin/rust-build-package-release-action@v3
-        id: validate
-        with:
-          command: validate-version
-
-      - uses: michaelklishin/rust-build-package-release-action@v3
-        with:
-          command: extract-changelog
-          version: ${{ steps.validate.outputs.version }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-notes
-          path: release_notes.md
-
-
-  # changelog:
-  #   name: Generate changelog
+      # - uses: modern-python/semvertag@v0
+      #   id: version
+      #   with:
+      #     strategy: conventional-commits
+      #   if: steps.version.outputs.status == 'created'
+      #     run: |
+      #       echo "tagged ${{ steps.version.outputs.tag }}"
+      #       echo "bump=${{ steps.version.outputs.bump }}"
+  # version:
   #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: write
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #       with:
+  #         fetch-depth: 0
+  #     -  uses: modern-python/semvertag@v0
+  #        with:
+  #         strategy: conventional-commits
+  #        id: version
+  #   outputs:
+  #     next: ${{ steps.version.outputs.tag }}
+
+  # validate:
+  #   runs-on: ubuntu-22.04
+  #   timeout-minutes: 5
+  #   outputs:
+  #     version: ${{ steps.validate.outputs.version }}
+  #   steps:
+  #     - uses: actions/checkout@v6
+
+  #     - uses: michaelklishin/rust-build-package-release-action@v3
+  #       id: validate
+  #       with:
+  #         command: validate-version
+
+  #     - uses: michaelklishin/rust-build-package-release-action@v3
+  #       with:
+  #         command: extract-changelog
+  #         version: ${{ steps.validate.outputs.version.next }}
+
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: release-notes
+  #         path: release_notes.md
+
+
+  # # changelog:
+  # #   name: Generate changelog
+  # #   runs-on: ubuntu-latest
+  # #   steps:
+  # #     - name: Checkout
+  # #       uses: actions/checkout@v6
+  # #       with:
+  # #         fetch-depth: 0
+
+  # #     - name: Generate a changelog
+  # #       uses: orhun/git-cliff-action@v4
+  # #       id: git-cliff
+  # #       with:
+  # #         config: cliff.toml
+  # #         args: --verbose
+  # #       env:
+  # #         OUTPUT: CHANGELOG.md
+
+  # #     - name: Print the changelog
+  # #       run: cat "${{ steps.git-cliff.outputs.changelog }}"
+
+  # build:
+  #   needs: validate
+  #   name: Build ${{ matrix.name }} Release Binaries
+  #   runs-on: ${{ matrix.os }}
+  #   timeout-minutes: 30
+  #   env:
+  #     version: ${{ needs.version.outputs.next }}
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       include:
+  #         - name: "macos-intel"
+  #           os: macos-15-intel
+  #           target: x86_64-apple-darwin
+  #           archive_suffix: macos-intel
+
+  #         - name: "macos-m1"
+  #           os: macos-14
+  #           target: aarch64-apple-darwin
+  #           archive_suffix: macos-m1
+
+  #         - name: "macos-m2"
+  #           os: macos-14
+  #           target: aarch64-apple-darwin
+  #           archive_suffix: macos-m2
+
+  #         - name: "linux-amd64"
+  #           os: ubuntu-24.04
+  #           target: x86_64-unknown-linux-gnu
+  #           archive_suffix: linux-amd64
+
+  #         - name: "linux-arm64"
+  #           os: ubuntu-24.04
+  #           target: aarch64-unknown-linux-gnu
+  #           archive_suffix: linux-arm64
   #   steps:
   #     - name: Checkout
   #       uses: actions/checkout@v6
+  #     - run: rustup toolchain install stable --profile minimal
+  #     - uses: michaelklishin/rust-build-package-release-action@v3
+  #       id: build
   #       with:
-  #         fetch-depth: 0
-
-  #     - name: Generate a changelog
-  #       uses: orhun/git-cliff-action@v4
-  #       id: git-cliff
+  #         command: release
+  #         version: ${{ needs.version.outputs.next }}
+  #         target: ${{ matrix.target }}
+  #         archive: "true"
+  #         locked: "true"
+  #         checksum: "sha256,sha512"
+  #         # notes-file: CHANGELOG.md
+  #     # Upload both bare binary and archive (for pipeline compatibility)
+  #     - uses: actions/upload-artifact@v7
   #       with:
-  #         config: cliff.toml
-  #         args: --verbose
-  #       env:
-  #         OUTPUT: CHANGELOG.md
+  #         name: ${{ matrix.target }}
+  #         path: |
+  #           ${{ steps.build.outputs.bare_artifact_path }}
+  #           ${{ steps.build.outputs.bare_artifact_path }}.sha256
+  #           ${{ steps.build.outputs.artifact_path }}
+  #           ${{ steps.build.outputs.artifact_path }}.sha256
+  #           ${{ steps.build.outputs.artifact_path }}.sha512
+  # release:
+  #   needs: [validate, build]
+  #   runs-on: ubuntu-22.04
+  #   timeout-minutes: 10
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         path: artifacts
+  #     - name: collect files
+  #       run: |
+  #         mkdir -p release
+  #             find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" -o -name "*.sha512" \) -exec cp {} release/ \;
 
-  #     - name: Print the changelog
-  #       run: cat "${{ steps.git-cliff.outputs.changelog }}"
-
-  build:
-    needs: validate
-    name: Build ${{ matrix.name }} Release Binaries
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    env:
-      version: ${{ needs.version.outputs.next }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: "macos-intel"
-            os: macos-15-intel
-            target: x86_64-apple-darwin
-            archive_suffix: macos-intel
-
-          - name: "macos-m1"
-            os: macos-14
-            target: aarch64-apple-darwin
-            archive_suffix: macos-m1
-
-          - name: "macos-m2"
-            os: macos-14
-            target: aarch64-apple-darwin
-            archive_suffix: macos-m2
-
-          - name: "linux-amd64"
-            os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            archive_suffix: linux-amd64
-
-          - name: "linux-arm64"
-            os: ubuntu-24.04
-            target: aarch64-unknown-linux-gnu
-            archive_suffix: linux-arm64
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-      - run: rustup toolchain install stable --profile minimal
-      - uses: michaelklishin/rust-build-package-release-action@v3
-        id: build
-        with:
-          command: release
-          version: ${{ needs.version.outputs.next }}
-          target: ${{ matrix.target }}
-          archive: "true"
-          locked: "true"
-          checksum: "sha256,sha512"
-          # notes-file: CHANGELOG.md
-      # Upload both bare binary and archive (for pipeline compatibility)
-      - uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.target }}
-          path: |
-            ${{ steps.build.outputs.bare_artifact_path }}
-            ${{ steps.build.outputs.bare_artifact_path }}.sha256
-            ${{ steps.build.outputs.artifact_path }}
-            ${{ steps.build.outputs.artifact_path }}.sha256
-            ${{ steps.build.outputs.artifact_path }}.sha512
-  release:
-    needs: [validate, build]
-    runs-on: ubuntu-22.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - name: collect files
-        run: |
-          mkdir -p release
-              find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" -o -name "*.sha512" \) -exec cp {} release/ \;
-
-      - uses: softprops/action-gh-release@v2.6.1
-        with:
-          body_path: artifacts/release-notes/release_notes.md
-          files: release/*
+  #     - uses: softprops/action-gh-release@v2.6.1
+  #       with:
+  #         body_path: artifacts/release-notes/release_notes.md
+  #         files: release/*
 
 
 
 
-            # target/${{ matrix.target }}/release/pathrc
-            # target/${{ matrix.target }}/release/pathrc.tar.gz
-            # target/${{ matrix.target }}/release/pathrc.tar.gz.sha256
-            # target/${{ matrix.target }}/release/pathrc.tar.gz.sha512
+  #           # target/${{ matrix.target }}/release/pathrc
+  #           # target/${{ matrix.target }}/release/pathrc.tar.gz
+  #           # target/${{ matrix.target }}/release/pathrc.tar.gz.sha256
+  #           # target/${{ matrix.target }}/release/pathrc.tar.gz.sha512
