@@ -71,6 +71,11 @@ jobs:
       - name: Test the built binary
         run: |
           target/${{ matrix.target }}/release/pathrc --version
+          cd target/${{ matrix.target }}
+          cargo install --path . --locked --force
+          pathrc --version
+          eval "$(pathrc init sh)"
+          pwd
 
       - uses: actions/upload-artifact@v7
         with:
