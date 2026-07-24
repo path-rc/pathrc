@@ -70,6 +70,7 @@ jobs:
           checksum: "sha256,sha512"
       - name: Test the built binary
         run: |
+          echo "Testing the built binary for ${{ matrix.target }}"
           target/${{ matrix.target }}/release/pathrc --version
           cd target/${{ matrix.target }}
           cargo install --path . --locked --force
