@@ -1,0 +1,39 @@
+name: 'Conventional Commit & Branch Check'
+description: 'Validates commit messages against Conventional Commits and the branch name against Conventional Branch naming, in pure shell.'
+inputs:
+  check-message:
+    description: 'Validate commit messages'
+    required: false
+    default: 'true'
+  check-branch:
+    description: 'Validate the branch name'
+    required: false
+    default: 'true'
+  commit-types:
+    description: 'Pipe-separated list of allowed Conventional Commit types'
+    required: false
+    default: 'build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
+  branch-types:
+    description: 'Pipe-separated list of allowed Conventional Branch types'
+    required: false
+    default: 'feature|feat|fix|bugfix|hotfix|release|chore|docs|refactor|test|build|ci|perf|style|revert'
+  allowed-branches:
+    description: 'Regex of branch names exempt from the branch naming check (e.g. main/develop)'
+    required: false
+    default: '^(main|master|develop|dev)$'
+outputs:
+  passed:
+    description: 'Whether all checks passed ("true"/"false")'
+    value: ${{ steps.validate.outputs.passed }}
+runs:
+  using: composite
+  steps:
+    - id: validate
+      shell: bash
+      run: "${GITHUB_ACTION_PATH}/validate.sh"
+      env:
+        INPUT_CHECK_MESSAGE: ${{ inputs.check-message }}
+        INPUT_CHECK_BRANCH: ${{ inputs.check-branch }}
+        INPUT_COMMIT_TYPES: ${{ inputs.commit-types }}
+        INPUT_BRANCH_TYPES: ${{ inputs.branch-types }}
+        INPUT_ALLOWED_BRANCHES: ${{ inputs.allowed-branches }}

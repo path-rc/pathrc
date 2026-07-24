@@ -15,14 +15,16 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Required for merge-base checks
-      - uses: commit-check/commit-check-action@v2
-        with:
-          message: true
-          branch: true
-          author-name: false
-          author-email: false
-          job-summary: true
-          pr-comments: ${{ github.event_name == 'pull_request' }}
+      - uses: ./.github/actions/conventional-check
+        # with
+      # - uses: commit-check/commit-check-action@v2
+        # with:
+        #   message: true
+        #   branch: true
+        #   author-name: false
+        #   author-email: false
+        #   job-summary: true
+        #   pr-comments: ${{ github.event_name == 'pull_request' }}
   build:
     needs: commit-check
     # name: Build ${{ matrix.name }}
@@ -70,6 +72,7 @@ jobs:
           checksum: "sha256,sha512"
       - name: Test the built binary
         run: |
+          echo "Testing the built binary for ${{ matrix.target }}"
           target/${{ matrix.target }}/release/pathrc --version
           cd target/${{ matrix.target }}
           cargo install --path . --locked --force
