@@ -57,7 +57,10 @@ impl PathRC {
                 break Some(buf);
             }
             if let Some(start) = start_dir {
-                if path.parent().is_some_and(|parent| Self::paths_equal(parent, start)) {
+                if path
+                    .parent()
+                    .is_some_and(|parent| Self::paths_equal(parent, start))
+                {
                     break None;
                 }
             }
@@ -89,24 +92,36 @@ impl PathRC {
     }
 
     pub fn print_file_names(&mut self) {
-        if self.found_files.len() == 0 {
+        if self.found_files.is_empty() {
             println!("no configuration files found in path")
-            }
-        else {
-        println!("\npathrc file processing order:\n");
-        while let Some(top) = self.found_files.pop() {
-            println!("{}", top.to_string());
+        } else {
+            println!("\npathrc file processing order:\n");
+            while let Some(top) = self.found_files.pop() {
+                match fs::File::open(&top) {
+                    Ok(_) => println!("{top}"),
+                    Err(error) => println!("{top}  [unreadable: {error}]"),
+                }
             }
         }
     }
 
+    /// Prints every file's contents, outermost first, for the shell to eval.
+    ///
+    /// `collate` runs on every `cd`, so a file that can't be read must not
+    /// break it: the problem goes to stderr, the file is skipped and the
+    /// rest still load. stdout carries only shell code.
     pub fn print_files_contents(&mut self) {
         while let Some(top) = self.found_files.pop() {
-            let filename = top.to_string();
-            let err_message = format!("Unable to read {}", filename);
-            println!("# File: {}", filename);
-            let contents = fs::read_to_string(filename).expect(err_message.as_str());
-            print!("{contents}");
+            match fs::read_to_string(&top) {
+                Ok(contents) => {
+                    println!("# File: {top}");
+                    print!("{contents}");
+                    if !contents.is_empty() && !contents.ends_with('\n') {
+                        println!();
+                    }
+                }
+                Err(error) => eprintln!("pathrc: {top}: {error}"),
+            }
         }
     }
 }

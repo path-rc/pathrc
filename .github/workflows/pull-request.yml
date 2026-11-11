@@ -25,6 +25,19 @@ jobs:
         #   author-email: false
         #   job-summary: true
         #   pr-comments: ${{ github.event_name == 'pull_request' }}
+  test:
+    needs: commit-check
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-15]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - run: rustup toolchain install stable --profile minimal
+      - name: Unit and integration tests
+        run: cargo test --locked
   build:
     needs: commit-check
     # name: Build ${{ matrix.name }}
@@ -39,12 +52,12 @@ jobs:
             archive_suffix: macos-intel
 
           - name: macos-m1
-            runner: macos-14
+            runner: macos-15
             target: aarch64-apple-darwin
             archive_suffix: macos-m1
 
           - name: macos-m2
-            runner: macos-14
+            runner: macos-15
             target: aarch64-apple-darwin
             archive_suffix: macos-m2
 
@@ -73,12 +86,9 @@ jobs:
       - name: Test the built binary
         run: |
           echo "Testing the built binary for ${{ matrix.target }}"
-          target/${{ matrix.target }}/release/pathrc --version
-          cd target/${{ matrix.target }}
-          cargo install --path . --locked --force
+          export PATH="$PWD/target/${{ matrix.target }}/release:$PATH"
           pathrc --version
           eval "$(pathrc init sh)"
-          pwd
 
       - uses: actions/upload-artifact@v7
         with:
