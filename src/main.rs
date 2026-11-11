@@ -1,12 +1,13 @@
+use crate::collate::handle_collate;
 use crate::init::handle_init;
 use crate::list::handle_list;
-use crate::collate::handle_collate;
 use clap::{ArgAction, Args, Parser, Subcommand};
+use std::process::ExitCode;
 
+pub mod collate;
 pub mod common;
 pub mod init;
 pub mod list;
-pub mod collate;
 mod pathrc;
 
 #[derive(Parser, Debug)]
@@ -38,17 +39,17 @@ pub struct InitArgs {
     enable_shared_config: Option<bool>,
 }
 
-fn main() {
+fn main() -> ExitCode {
     let cli = Cli::parse();
     match &cli.command {
         Commands::Init(init_args) => {
             handle_init(init_args);
+            ExitCode::SUCCESS
         }
         Commands::Collate => {
             handle_collate();
+            ExitCode::SUCCESS
         }
-        Commands::List => {
-            handle_list();
-        }
+        Commands::List => handle_list(),
     }
 }

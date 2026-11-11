@@ -32,13 +32,12 @@ pub fn get_shell_name(shell: Shell) -> String {
     }
 }
 
-pub fn get_file_name(shell_name: String) -> String {
-    match shell_name.as_str() {
-        "sh" => ".pathrc-sh".to_string(),
-        "bash" => ".pathrc-bash".to_string(),
-        "zsh" => ".pathrc-zsh".to_string(),
-        "fish" => ".pathrc-fish".to_string(),
-        _ => panic!("ISSUE: Invalid shell name '{}'.", shell_name),
+/// The configuration file name for a shell, or `None` for a shell pathrc
+/// doesn't know (a hand-set or stale `PATHRC_SHELL`).
+pub fn get_file_name(shell_name: &str) -> Option<String> {
+    match shell_name {
+        "sh" | "bash" | "zsh" | "fish" => Some(format!(".pathrc-{shell_name}")),
+        _ => None,
     }
 }
 
