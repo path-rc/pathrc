@@ -101,5 +101,22 @@ echo 'export CLONED=changed' > "$tree/cloned/.pathrc"
 check "bash: a changed file is not evaluated" "-" \
   "$(run_posix bash bash 'cd cloned 2>/dev/null; echo "-$CLONED"')"
 
+# An encrypted file, made with the age CLI if it is installed.
+if command -v age-keygen > /dev/null && command -v age > /dev/null; then
+  mkdir -p "$XDG_CONFIG_HOME/pathrc" "$tree/secret"
+  age-keygen -o "$XDG_CONFIG_HOME/pathrc/identity" 2> /dev/null
+  printf 'export TOKEN=from-age\n#zsh\nexport TOKEN=zsh-age\n' |
+    age -a -r "$(age-keygen -y "$XDG_CONFIG_HOME/pathrc/identity")" > "$tree/secret/.pathrc.age"
+  (cd "$tree/secret" && pathrc allow > /dev/null)
+  check "bash: .pathrc.age is decrypted" "from-age" \
+    "$(run_posix bash bash 'cd secret; echo "$TOKEN"')"
+  if command -v zsh > /dev/null; then
+    check "zsh: sections apply inside .pathrc.age" "zsh-age" \
+      "$(run_posix zsh zsh 'cd secret; echo "$TOKEN"')"
+  fi
+else
+  echo "skip: age CLI not installed"
+fi
+
 echo "$pass passed, $fail failed"
 [[ $fail == 0 ]]

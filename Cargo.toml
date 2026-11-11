@@ -13,11 +13,13 @@ description = "Command line utility to provide per path configurations for alias
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+age = { version = "0.12", features = ["ssh", "armor", "cli-common", "plugin"] }
 clap = { version = "4.5.4", features = ["cargo", "derive", "env"] }
 envmnt = "0.10.4"
 rust-embed = "8.3.0"
 sha2 = "0.10"
 tempfile = "3"
+zeroize = "1"
 
 [dev-dependencies]
 assert_cmd = "2"

@@ -1,7 +1,7 @@
 //! `pathrc allow` and `pathrc deny`.
 
 use crate::common::current_dir;
-use crate::files::PLAIN;
+use crate::files::{in_dir, PLAIN};
 use crate::trust::Store;
 use std::fs;
 use std::path::PathBuf;
@@ -13,13 +13,12 @@ fn targets(files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
         return Ok(files.to_vec());
     }
     let cwd = current_dir()?;
-    let found: Vec<_> = [PLAIN]
-        .iter()
-        .map(|name| cwd.join(name))
-        .filter(|path| path.is_file())
-        .collect();
+    let found: Vec<_> = in_dir(&cwd).into_iter().map(|f| f.path).collect();
     if found.is_empty() {
-        return Err(format!("no {PLAIN} file in {}", cwd.display()));
+        return Err(format!(
+            "no {PLAIN} or {PLAIN}.age file in {}",
+            cwd.display()
+        ));
     }
     Ok(found)
 }

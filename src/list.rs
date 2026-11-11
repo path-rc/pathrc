@@ -24,6 +24,9 @@ pub fn handle_list() -> ExitCode {
     println!("pathrc file processing order ({shell}):\n");
     for file in files {
         let mut marks = Vec::new();
+        if file.encrypted {
+            marks.push("age".to_string());
+        }
         match fs::read(&file.path) {
             Err(error) => marks.push(format!("unreadable: {error}")),
             Ok(bytes) => {
@@ -32,7 +35,12 @@ pub fn handle_list() -> ExitCode {
                     Trust::Untrusted => marks.push("untrusted".to_string()),
                     Trust::Changed => marks.push("changed".to_string()),
                 }
-                let problems: Vec<_> = validate(&bytes).iter().map(|p| p.to_string()).collect();
+                // An encrypted file's structure can't be seen without decrypting it.
+                let problems: Vec<_> = if file.encrypted {
+                    Vec::new()
+                } else {
+                    validate(&bytes).iter().map(|p| p.to_string()).collect()
+                };
                 if !problems.is_empty() {
                     marks.push(format!("invalid: {}", problems.join("; ")));
                 }

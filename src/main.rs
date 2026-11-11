@@ -10,6 +10,7 @@ pub mod allow;
 pub mod collate;
 pub mod common;
 pub mod config;
+pub mod crypto;
 pub mod files;
 pub mod init;
 pub mod list;
@@ -17,7 +18,8 @@ pub mod shell;
 pub mod trust;
 
 const AFTER_HELP: &str = "\
-Configuration lives in one .pathrc file per directory. Lines before any
+Configuration lives in one .pathrc file per directory, and optionally an
+age-encrypted .pathrc.age beside it, read after it. Lines before any
 section marker apply to every shell; a line that is exactly #sh (bash and
 zsh), #bash, #zsh or #fish starts a section for those shells.
 
@@ -40,9 +42,9 @@ enum Commands {
     Collate,
     /// Lists the .pathrc files in scope in processing order, with any problems
     List,
-    /// Allows files to be evaluated (default: the .pathrc in this directory)
+    /// Allows files to be evaluated (default: the .pathrc and .pathrc.age here)
     Allow(FilesArgs),
-    /// Stops files being evaluated (default: the .pathrc in this directory)
+    /// Stops files being evaluated (default: the .pathrc and .pathrc.age here)
     Deny(FilesArgs),
 }
 

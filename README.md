@@ -79,6 +79,32 @@ Migrating from the per-shell files (`.pathrc-bash`, `.pathrc-zsh`,
 The search traverses parent directories up to and including the directory
 specified in the `PATHRC_START` environment variable.
 
+### Encrypted files
+
+A directory may also hold `.pathrc.age`: a `.pathrc` (same sections)
+encrypted with [age](https://age-encryption.org). It is read after the
+plain `.pathrc` in the same directory, so a secret can override a default.
+pathrc decrypts it in memory; the plaintext is never written to disk.
+
+pathrc uses the first identity it finds:
+
+1. the file named in `PATHRC_IDENTITY`;
+2. `~/.config/pathrc/identity` (`$XDG_CONFIG_HOME/pathrc/identity`);
+3. `~/.ssh/id_ed25519`.
+
+An age identity (`age-keygen -o ~/.config/pathrc/identity`) or an
+unencrypted ssh-ed25519 or ssh-rsa key works. A passphrase-protected identity
+prompts on the terminal; plugin identities such as `age-plugin-yubikey` work
+if the plugin is on your `PATH`. A file that can't be decrypted is reported
+on stderr and skipped; the other files still load. `pathrc list` marks
+encrypted files `[age]` without decrypting them.
+
+To make one by hand until `pathrc encrypt` exists:
+
+```shell
+age -a -r "$(age-keygen -y ~/.config/pathrc/identity)" -o .pathrc.age .pathrc
+```
+
 ### Allowing files
 
 pathrc evaluates its files on every `cd`, so a cloned repository containing a
@@ -86,12 +112,13 @@ pathrc evaluates its files on every `cd`, so a cloned repository containing a
 evaluated once you have read it and allowed it:
 
 ```shell
-pathrc allow            # the .pathrc in this directory
+pathrc allow            # the .pathrc and .pathrc.age in this directory
 pathrc allow path/to/.pathrc
 pathrc deny             # stop evaluating it
 ```
 
-pathrc records each allowed file's path and SHA-256 in
+An encrypted file is allowed by the hash of its ciphertext, so checking it
+never needs decryption. pathrc records each allowed file's path and SHA-256 in
 `$XDG_DATA_HOME/pathrc/allowed` (`~/.local/share/pathrc/allowed`). Editing a
 file means allowing it again; until then `cd` skips it with a hint on stderr,
 and `pathrc list` marks it `[changed]` (or `[untrusted]` if never allowed).
