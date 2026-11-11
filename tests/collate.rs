@@ -3,6 +3,14 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+/// A temporary directory named by its resolved path. On macOS the temp
+/// directory is under `/var`, a symlink to `/private/var`, and pathrc reports
+/// resolved paths.
+fn tempdir() -> tempfile::TempDir {
+    let base = std::env::temp_dir().canonicalize().unwrap();
+    tempfile::tempdir_in(base).unwrap()
+}
+
 /// A scratch HOME and XDG_DATA_HOME, so the allow list is never the user's.
 struct Env {
     home: tempfile::TempDir,
@@ -10,9 +18,7 @@ struct Env {
 
 impl Env {
     fn new() -> Env {
-        Env {
-            home: tempfile::tempdir().unwrap(),
-        }
+        Env { home: tempdir() }
     }
 
     fn pathrc(&self, start: &Path, cwd: &Path) -> Command {
@@ -47,7 +53,7 @@ impl Env {
 
 /// root/.pathrc, root/a/.pathrc, root/a/b/.pathrc, all allowed.
 fn three_levels(env: &Env) -> (tempfile::TempDir, PathBuf, PathBuf) {
-    let root = tempfile::tempdir().unwrap();
+    let root = tempdir();
     let middle = root.path().join("a");
     let inner = middle.join("b");
     fs::create_dir_all(&inner).unwrap();
@@ -137,7 +143,7 @@ fn collate_skips_untrusted_and_changed_files() {
 #[test]
 fn allow_without_a_file_in_the_directory_fails() {
     let env = Env::new();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let output = env
         .pathrc(dir.path(), dir.path())
         .arg("allow")
@@ -151,7 +157,7 @@ fn allow_without_a_file_in_the_directory_fails() {
 
 #[test]
 fn collate_without_init_writes_nothing_to_stdout() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let output = Command::cargo_bin("pathrc")
         .unwrap()
         .current_dir(dir.path())
@@ -167,7 +173,7 @@ fn collate_without_init_writes_nothing_to_stdout() {
 #[test]
 fn collate_with_an_unknown_shell_does_not_panic() {
     let env = Env::new();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let output = env
         .pathrc(dir.path(), dir.path())
         .env("PATHRC_SHELL", "tcsh")
