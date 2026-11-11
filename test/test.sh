@@ -50,6 +50,7 @@ export LEVEL=project-zsh
 set -gx LEVEL project-fish
 PATHRC
 printf 'export LEVEL=sub\nexport SUB=yes' > "$tree/project/sub/.pathrc" # no final newline
+pathrc allow "$tree/.pathrc" "$tree/project/.pathrc" "$tree/project/sub/.pathrc" > /dev/null
 
 run_posix() { # shell init-arg script
   (cd "$tree" && "$1" -c "eval \"\$(pathrc init $2)\"; $3" 2>&1)
@@ -87,6 +88,18 @@ if [[ $(id -u) != 0 ]]; then
     "$(run_posix bash bash 'cd project/sub 2>/dev/null; echo "$LEVEL $TOP_SH"')"
   chmod 644 "$tree/project/.pathrc"
 fi
+
+# Nothing is evaluated until allowed, and a change needs allowing again.
+mkdir -p "$tree/cloned"
+echo 'export CLONED=ran' > "$tree/cloned/.pathrc"
+check "bash: an untrusted file is not evaluated" "-" \
+  "$(run_posix bash bash 'cd cloned 2>/dev/null; echo "-$CLONED"')"
+(cd "$tree/cloned" && pathrc allow > /dev/null)
+check "bash: it runs once allowed" "-ran" \
+  "$(run_posix bash bash 'cd cloned 2>/dev/null; echo "-$CLONED"')"
+echo 'export CLONED=changed' > "$tree/cloned/.pathrc"
+check "bash: a changed file is not evaluated" "-" \
+  "$(run_posix bash bash 'cd cloned 2>/dev/null; echo "-$CLONED"')"
 
 echo "$pass passed, $fail failed"
 [[ $fail == 0 ]]

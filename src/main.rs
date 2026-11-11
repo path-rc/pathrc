@@ -1,9 +1,12 @@
+use crate::allow::{handle_allow, handle_deny};
 use crate::collate::handle_collate;
 use crate::init::handle_init;
 use crate::list::handle_list;
 use clap::{Args, Parser, Subcommand};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
+pub mod allow;
 pub mod collate;
 pub mod common;
 pub mod config;
@@ -11,11 +14,15 @@ pub mod files;
 pub mod init;
 pub mod list;
 pub mod shell;
+pub mod trust;
 
 const AFTER_HELP: &str = "\
 Configuration lives in one .pathrc file per directory. Lines before any
 section marker apply to every shell; a line that is exactly #sh (bash and
-zsh), #bash, #zsh or #fish starts a section for those shells.";
+zsh), #bash, #zsh or #fish starts a section for those shells.
+
+A file is only evaluated once you have allowed it with `pathrc allow`, and
+again after every change to it.";
 
 #[derive(Parser, Debug)]
 #[command(version, author, about, long_about, after_help = AFTER_HELP)]
@@ -33,6 +40,16 @@ enum Commands {
     Collate,
     /// Lists the .pathrc files in scope in processing order, with any problems
     List,
+    /// Allows files to be evaluated (default: the .pathrc in this directory)
+    Allow(FilesArgs),
+    /// Stops files being evaluated (default: the .pathrc in this directory)
+    Deny(FilesArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct FilesArgs {
+    /// Files to act on
+    files: Vec<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -54,5 +71,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Commands::List => handle_list(),
+        Commands::Allow(args) => handle_allow(&args.files),
+        Commands::Deny(args) => handle_deny(&args.files),
     }
 }
