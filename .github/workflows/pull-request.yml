@@ -38,6 +38,11 @@ jobs:
       - run: rustup toolchain install stable --profile minimal
       - name: Unit and integration tests
         run: cargo test --locked
+      - name: Install zsh and fish
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh fish
+      - name: End-to-end shell tests
+        run: cargo build --locked && bash test/test.sh
   build:
     needs: commit-check
     # name: Build ${{ matrix.name }}

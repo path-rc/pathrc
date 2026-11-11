@@ -1,28 +1,30 @@
-use crate::common::{get_configured_shell, get_path, print_not_initialized};
-use crate::init::get_file_name;
-use crate::pathrc::PathRC;
+use crate::common::current_dir;
+use crate::config::select;
+use crate::files::{find, start_dir};
+use crate::shell::Shell;
+use std::fs;
 
-/// Prints the shell code for the current directory. Never fails the `cd`
-/// hook: problems are reported on stderr and the exit status stays 0.
+/// Prints the shell code for the current directory, outermost file first.
+/// Never fails the `cd` hook: problems are reported on stderr, the file is
+/// skipped, and the exit status stays 0. stdout carries only shell code.
 pub fn handle_collate() {
-    let configured_shell = get_configured_shell();
-    match configured_shell.as_str() {
-        "NONE" => print_not_initialized(),
-        _ => {
-            let Some(pathrc_filename) = get_file_name(&configured_shell) else {
-                eprintln!("pathrc: unknown PATHRC_SHELL '{configured_shell}'; run 'pathrc init'");
-                return;
-            };
-            let dir = match get_path() {
-                Ok(dir) => dir,
-                Err(error) => {
-                    eprintln!("pathrc: cannot read the current directory: {error}");
-                    return;
+    let (shell, cwd) = match Shell::configured().and_then(|s| Ok((s, current_dir()?))) {
+        Ok(found) => found,
+        Err(message) => {
+            eprintln!("pathrc: {message}");
+            return;
+        }
+    };
+    for file in find(&cwd, start_dir().as_deref()) {
+        match fs::read_to_string(&file.path) {
+            Ok(contents) => {
+                let code = select(&contents, shell);
+                if !code.is_empty() {
+                    println!("# File: {}", file.path.display());
+                    print!("{code}");
                 }
-            };
-            let mut pathrc = PathRC::new(dir);
-            pathrc.search_files(pathrc_filename);
-            pathrc.print_files_contents();
+            }
+            Err(error) => eprintln!("pathrc: {}: {error}", file.path.display()),
         }
     }
 }
