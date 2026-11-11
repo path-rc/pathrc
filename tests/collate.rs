@@ -152,7 +152,7 @@ fn allow_without_a_file_in_the_directory_fails() {
     assert!(!output.status.success());
     assert!(String::from_utf8(output.stderr)
         .unwrap()
-        .contains("no .pathrc file"));
+        .contains("no .pathrc or .pathrc.age file"));
 }
 
 #[test]
