@@ -11,9 +11,11 @@ pub mod collate;
 pub mod common;
 pub mod config;
 pub mod crypto;
+pub mod edit;
 pub mod files;
 pub mod init;
 pub mod list;
+pub mod manage;
 pub mod quote;
 pub mod shell;
 pub mod show;
@@ -52,6 +54,48 @@ enum Commands {
         /// The shell whose sections to print [default: PATHRC_SHELL]
         #[arg(long, short, value_enum)]
         shell: Option<ShowShell>,
+    },
+    /// Creates or changes a .pathrc or .pathrc.age in $VISUAL/$EDITOR,
+    /// decrypting and re-encrypting as needed
+    #[command(
+        long_about = "Creates or changes a .pathrc or .pathrc.age in $VISUAL, $EDITOR or vi.\n\n\
+        With no file: .pathrc.age in this directory if it exists (or with --encrypt), else .pathrc. \
+        An encrypted file is decrypted into a private temporary file under $XDG_RUNTIME_DIR, \
+        removed afterwards, and encrypted again on save for the nearest .pathrc-recipients \
+        (else your own identity). The structure is checked on save (section markers, text): \
+        problems reopen the editor with notes at the top. The saved file is allowed."
+    )]
+    Edit {
+        /// The file to edit
+        file: Option<PathBuf>,
+        /// Make a new file encrypted (.pathrc.age)
+        #[arg(long)]
+        encrypt: bool,
+        /// Allow the system temp directory when XDG_RUNTIME_DIR is not set
+        #[arg(long)]
+        tmp_ok: bool,
+    },
+    /// Encrypts .pathrc to .pathrc.age for the nearest .pathrc-recipients (or
+    /// your identity), then removes the plaintext
+    Encrypt {
+        /// The file [default: .pathrc here]
+        file: Option<PathBuf>,
+        /// Replace an existing .pathrc.age
+        #[arg(long)]
+        force: bool,
+    },
+    /// Decrypts .pathrc.age back to a plain .pathrc, then removes the .age
+    Decrypt {
+        /// The file [default: .pathrc.age here]
+        file: Option<PathBuf>,
+        /// Replace an existing .pathrc
+        #[arg(long)]
+        force: bool,
+    },
+    /// Re-encrypts .pathrc.age files for the current recipients
+    Rekey {
+        /// Files [default: .pathrc.age here]
+        files: Vec<PathBuf>,
     },
     /// Allows files to be evaluated (default: the .pathrc and .pathrc.age here)
     Allow(FilesArgs),
@@ -113,6 +157,18 @@ fn main() -> ExitCode {
         }
         Commands::List => handle_list(),
         Commands::Show { shell } => show::handle_show(shell.map(Into::into)),
+        Commands::Edit {
+            file,
+            encrypt,
+            tmp_ok,
+        } => edit::handle_edit(edit::EditArgs {
+            file: file.as_deref(),
+            encrypt: *encrypt,
+            tmp_ok: *tmp_ok,
+        }),
+        Commands::Encrypt { file, force } => manage::handle_encrypt(file.as_deref(), *force),
+        Commands::Decrypt { file, force } => manage::handle_decrypt(file.as_deref(), *force),
+        Commands::Rekey { files } => manage::handle_rekey(files),
         Commands::Allow(args) => handle_allow(&args.files),
         Commands::Deny(args) => handle_deny(&args.files),
         Commands::Undo { shell, mark } => undo::handle_undo(

@@ -99,11 +99,42 @@ if the plugin is on your `PATH`. A file that can't be decrypted is reported
 on stderr and skipped; the other files still load. `pathrc list` marks
 encrypted files `[age]` without decrypting them.
 
-To make one by hand until `pathrc encrypt` exists:
+#### Working with encrypted files
 
 ```shell
-age -a -r "$(age-keygen -y ~/.config/pathrc/identity)" -o .pathrc.age .pathrc
+pathrc edit --encrypt       # create .pathrc.age here in $EDITOR
+pathrc edit                 # edit .pathrc.age (or .pathrc) here
+pathrc encrypt              # .pathrc -> .pathrc.age, removing the plaintext
+pathrc decrypt              # .pathrc.age -> .pathrc
+pathrc rekey                # re-encrypt after the recipients change
 ```
+
+`edit` decrypts into a private temporary file (mode 0600 in
+`$XDG_RUNTIME_DIR/pathrc`, normally RAM-backed), opens `$VISUAL`, `$EDITOR`
+or `vi`, checks the structure when you save, and encrypts the result again.
+If a section marker is wrong it reopens the editor with the problems noted
+at the top. The temporary file is removed however the edit ends, Ctrl-C
+included. Without `XDG_RUNTIME_DIR` it refuses to put decrypted text on disk
+unless you pass `--tmp-ok`.
+
+Files are encrypted for the recipients in the nearest `.pathrc-recipients`
+up the directory tree, one age or SSH public key per line, so a team
+project can list everyone's keys:
+
+```shell
+# ~/work/client/.pathrc-recipients
+age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq   # alice
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyForBob bob@laptop
+```
+
+With no recipients file, a file is encrypted for your own identity. After
+changing a recipients file, run `pathrc rekey` in each directory below it.
+
+A file pathrc writes for you (`edit`) is allowed. `encrypt`, `decrypt` and
+`rekey` keep a file allowed only if it was allowed before.
+
+`encrypt` deletes the plaintext; it does not overwrite it on disk first, so
+on most filesystems the old blocks remain until reused.
 
 ### Leaving a directory
 
@@ -164,6 +195,10 @@ This is the engine the `cd` hook runs. It works out which files have left
 scope or changed and which are new, and prints the shell code that unloads
 and loads them.
 
+#### Edit, encrypt, decrypt and rekey
+
+See [Working with encrypted files](#working-with-encrypted-files).
+
 #### Show
 
 `pathrc show` prints the configuration in scope, decrypted, as plain shell
@@ -190,7 +225,8 @@ skipped, and the other files still load.
 
 `pathrc` itself has the usual flags for help `-h` and version `-V`.
 
-`list` and `collate` have no further options.
+`list` and `collate` have no further options; `pathrc <command> -h` shows
+the rest.
 
 `init` takes an optional `shell` argument with `env` being the default which
 tried to fetch the current shell from the environment.
