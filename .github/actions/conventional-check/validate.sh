@@ -50,12 +50,13 @@ if [ "$check_message" = "true" ]; then
 
   if [ -n "${GITHUB_BASE_REF:-}" ]; then
     # PR context: check every commit introduced on top of the base branch.
+    # --no-merges: HEAD is the merge commit GitHub makes for the PR.
     git fetch --no-tags --depth=50 origin "$GITHUB_BASE_REF" >/dev/null 2>&1 || true
     base_sha="$(git merge-base "origin/${GITHUB_BASE_REF}" HEAD 2>/dev/null || true)"
     if [ -n "$base_sha" ]; then
       while IFS= read -r sha; do
         commits+=("$sha")
-      done < <(git rev-list "${base_sha}..HEAD")
+      done < <(git rev-list --no-merges "${base_sha}..HEAD")
     fi
   fi
 
