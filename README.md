@@ -105,6 +105,26 @@ To make one by hand until `pathrc encrypt` exists:
 age -a -r "$(age-keygen -y ~/.config/pathrc/identity)" -o .pathrc.age .pathrc
 ```
 
+### Leaving a directory
+
+In bash and zsh, what a directory's files set is taken back out when you
+leave it: variables they created are unset, variables they changed get their
+old values back (so an inner override of an outer setting is restored on the
+way out), and their aliases and functions are removed or restored. Moving
+sideways from one project to its sibling unloads one and loads the other.
+
+pathrc does this by snapshotting the shell's variables, aliases and functions
+before and after each file, so a file can contain any shell code. Some
+consequences:
+
+- A value you change by hand after a file set it is reset when you leave.
+- Files already loaded and unchanged are not read again on `cd`, so an
+  encrypted file is decrypted once when you enter its scope, not on every
+  `cd` inside it. A changed file is reloaded, with every file inside it.
+- A new shell (a subshell, a terminal multiplexer pane) loads for itself; it
+  inherits exported variables but not the record of what to undo.
+- fish loads files but does not unload them.
+
 ### Allowing files
 
 pathrc evaluates its files on every `cd`, so a cloned repository containing a
@@ -140,8 +160,9 @@ bash with the `Bourne` shell. NOTE this is completely untested!
 
 #### Collate
 
-This is the engine that collates all the pathrc configuration files which get
-evaluated into the shell when changing directory.
+This is the engine the `cd` hook runs. It works out which files have left
+scope or changed and which are new, and prints the shell code that unloads
+and loads them.
 
 #### Allow and deny
 
@@ -196,3 +217,18 @@ SHELL environment variable that maybe missing or different in some systems.
 
 This environment variable is dynamically set during init to the shell's starting
 working directory.
+
+#### PATHRC_IDENTITY
+
+The age identity file for decrypting `.pathrc.age` files. See
+[Encrypted files](#encrypted-files).
+
+#### PATHRC_LOADED
+
+Set by the hook for each run of `collate`, from the shell's own
+`__pathrc_loaded` variable: the files loaded so far, one `sha256 path` line
+each. It is not exported, so a new shell starts with nothing loaded.
+
+#### PATHRC_DEBUG
+
+When set, `collate` reports each file it decrypts on stderr.

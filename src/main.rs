@@ -14,8 +14,11 @@ pub mod crypto;
 pub mod files;
 pub mod init;
 pub mod list;
+pub mod quote;
 pub mod shell;
+pub mod state;
 pub mod trust;
+pub mod undo;
 
 const AFTER_HELP: &str = "\
 Configuration lives in one .pathrc file per directory, and optionally an
@@ -46,6 +49,15 @@ enum Commands {
     Allow(FilesArgs),
     /// Stops files being evaluated (default: the .pathrc and .pathrc.age here)
     Deny(FilesArgs),
+    /// Used by the init scripts: reads two shell snapshots on stdin and
+    /// prints the code undoing the difference
+    #[command(name = "_undo", hide = true)]
+    Undo {
+        #[arg(value_parser = ["bash", "zsh"])]
+        shell: String,
+        /// The section marker prefix the snapshots use
+        mark: String,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -58,16 +70,16 @@ pub struct FilesArgs {
 pub struct InitArgs {
     /// Optional Shell override
     #[arg(value_enum, default_value = "env")]
-    shell: init::Shell,
+    shell: init::InitShell,
+    /// Print only a shell's hook script (used by the sh script)
+    #[arg(long, value_enum, hide = true)]
+    script: Option<init::InitShell>,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match &cli.command {
-        Commands::Init(init_args) => {
-            handle_init(init_args);
-            ExitCode::SUCCESS
-        }
+        Commands::Init(init_args) => handle_init(init_args),
         Commands::Collate => {
             handle_collate();
             ExitCode::SUCCESS
@@ -75,5 +87,9 @@ fn main() -> ExitCode {
         Commands::List => handle_list(),
         Commands::Allow(args) => handle_allow(&args.files),
         Commands::Deny(args) => handle_deny(&args.files),
+        Commands::Undo { shell, mark } => undo::handle_undo(
+            shell::Shell::from_name(shell).expect("clap allows only bash and zsh"),
+            mark,
+        ),
     }
 }

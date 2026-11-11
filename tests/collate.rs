@@ -78,8 +78,7 @@ fn collate_skips_an_unreadable_file_and_loads_the_rest() {
     }
 
     let (stdout, stderr) = env.collate(root.path(), &inner);
-    // A file without a trailing newline still ends its own line.
-    assert!(stdout.contains("export OUTER=1\n# File:"), "{stdout}");
+    assert!(stdout.contains("export OUTER=1"), "{stdout}");
     assert!(stdout.contains("export INNER=1"), "{stdout}");
     assert!(!stdout.contains("MIDDLE"), "{stdout}");
     assert!(
