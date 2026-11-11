@@ -295,7 +295,15 @@ fn a_failing_or_interrupted_editor_saves_nothing_and_cleans_up() {
     // the editor then exits as an interrupted one would.
     let interrupted = env.editor(
         "interrupted.sh",
-        "echo 'export K=3' >> \"$1\"; kill -INT $(ps -o ppid= -p $PPID); sleep 0.2; exit 130",
+        // Walk up to pathrc: macOS's sh execs the editor, so pathrc is its
+        // parent there, while dash leaves a shell in between.
+        "echo 'export K=3' >> \"$1\"
+p=$PPID
+while [ \"$p\" -gt 1 ]; do
+  case $(ps -o comm= -p \"$p\") in *pathrc) kill -INT \"$p\"; break ;; esac
+  p=$(ps -o ppid= -p \"$p\" | tr -d ' ')
+done
+sleep 0.2; exit 130",
     );
     for editor in [fails, interrupted] {
         let out = env
