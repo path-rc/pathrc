@@ -42,18 +42,39 @@ Add
 eval "$(pathrc init)"
 ```
 
-to your shell init file:
+to your shell init file (fish: `pathrc init fish | source` in
+`config.fish`).
 
-By default, pathrc rc files should be named according to the shell:
+Each directory holds one `.pathrc` file, read by every shell. Lines before
+any section marker apply to every shell. A line that is exactly one of these
+markers starts a section, which runs to the next marker:
 
-* Under `Bash` pathrc searches for files named `.pathrc-bash`
-* Under`Zsh` pathrc searches for files named `.pathrc-zsh`
-* Under`Fish` pathrc searches for files named `.pathrc-fish`
+| Marker  | Read by                                       |
+|---------|-----------------------------------------------|
+| `#sh`   | bash and zsh (and `pathrc init sh`)           |
+| `#bash` | bash                                          |
+| `#zsh`  | zsh                                           |
+| `#fish` | fish                                          |
 
-During initialisation shells with a reasonable level of compatibility i.e.
-`Bash` and `Zsh` can use the same files by setting the shell to sh. This uses
-the bash compatible method for detecting a directory change and `.pathrc-sh` for
-configuratoon files.
+```shell
+export PROJECT=acme
+#sh
+alias build='make -j8'
+#zsh
+setopt extended_glob
+#fish
+alias build 'make -j8'
+```
+
+`pathrc list` flags a marker-shaped line it does not know, such as `#bahs`.
+Ordinary comments have a space after the `#` and are left alone.
+
+Migrating from the per-shell files (`.pathrc-bash`, `.pathrc-zsh`,
+`.pathrc-sh`, `.pathrc-fish`), which are no longer read:
+
+```shell
+{ echo '#bash'; cat .pathrc-bash; } > .pathrc && rm .pathrc-bash
+```
 
 The search traverses parent directories up to and including the directory
 specified in the `PATHRC_START` environment variable.
@@ -78,7 +99,11 @@ evaluated into the shell when changing directory.
 #### List
 
 This is a useful utility for identifying the pathrc configuration files that
-will be processed at the current directory.
+will be processed at the current directory. A file that cannot be read, or has
+an unknown section marker, is marked.
+
+`collate` never breaks `cd`: a file it cannot read is reported on stderr and
+skipped, and the other files still load.
 
 #### Usage
 
@@ -99,7 +124,8 @@ or to force a shell i.e. bash
 eval "$(pathrc init bash)"
 ```
 
-or for a shared bash and zsh config
+or to read only the common and `#sh` sections, for a shell that is neither
+bash nor zsh but compatible
 
 ```shell
 eval "$(pathrc init sh)"

@@ -34,17 +34,10 @@ pub fn get_shell_name(shell: Shell) -> String {
 
 /// The configuration file name for a shell, or `None` for a shell pathrc
 /// doesn't know (a hand-set or stale `PATHRC_SHELL`).
-pub fn get_file_name(shell_name: &str) -> Option<String> {
-    match shell_name {
-        "sh" | "bash" | "zsh" | "fish" => Some(format!(".pathrc-{shell_name}")),
-        _ => None,
-    }
-}
-
 pub fn print_init_script(shell: String) {
     let base: &str = "pathrc.";
     let filename = format!("{base}{shell}.cfg");
-    let script_name: &str = &*filename;
+    let script_name: &str = &filename;
     let script = Asset::get(script_name).unwrap();
     let string_data = str::from_utf8(script.data.as_ref());
     print!("{}", string_data.unwrap());

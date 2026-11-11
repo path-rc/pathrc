@@ -1,19 +1,25 @@
 use crate::collate::handle_collate;
 use crate::init::handle_init;
 use crate::list::handle_list;
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::process::ExitCode;
 
 pub mod collate;
 pub mod common;
+pub mod config;
+pub mod files;
 pub mod init;
 pub mod list;
-mod pathrc;
+pub mod shell;
+
+const AFTER_HELP: &str = "\
+Configuration lives in one .pathrc file per directory. Lines before any
+section marker apply to every shell; a line that is exactly #sh (bash and
+zsh), #bash, #zsh or #fish starts a section for those shells.";
 
 #[derive(Parser, Debug)]
-#[command(version, author, about, long_about)]
+#[command(version, author, about, long_about, after_help = AFTER_HELP)]
 #[command(propagate_version = true)]
-
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -21,11 +27,11 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Initialises the shell
+    /// Initialises the shell: add `eval "$(pathrc init)"` to your shell rc file
     Init(InitArgs),
-    /// Collates the pathrc files
+    /// Prints the shell code from every .pathrc in scope (run by the cd hook)
     Collate,
-    /// Lists configuration files in processing order
+    /// Lists the .pathrc files in scope in processing order, with any problems
     List,
 }
 
@@ -34,9 +40,6 @@ pub struct InitArgs {
     /// Optional Shell override
     #[arg(value_enum, default_value = "env")]
     shell: init::Shell,
-    /// Use shared config for compatible shells
-    #[clap(long, short='s', action = ArgAction::SetTrue)]
-    enable_shared_config: Option<bool>,
 }
 
 fn main() -> ExitCode {

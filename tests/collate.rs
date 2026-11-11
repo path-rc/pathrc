@@ -27,11 +27,11 @@ fn collate_skips_an_unreadable_file_and_loads_the_rest() {
     let middle = root.path().join("a");
     let inner = middle.join("b");
     fs::create_dir_all(&inner).unwrap();
-    fs::write(root.path().join(".pathrc-bash"), "export OUTER=1").unwrap();
-    let broken = middle.join(".pathrc-bash");
+    fs::write(root.path().join(".pathrc"), "export OUTER=1").unwrap();
+    let broken = middle.join(".pathrc");
     fs::write(&broken, "export MIDDLE=1\n").unwrap();
     fs::set_permissions(&broken, fs::Permissions::from_mode(0o000)).unwrap();
-    fs::write(inner.join(".pathrc-bash"), "export INNER=1\n").unwrap();
+    fs::write(inner.join(".pathrc"), "export INNER=1\n").unwrap();
 
     if fs::read(&broken).is_ok() {
         eprintln!("running as a user who can read mode 000 files; skipping");
