@@ -150,12 +150,12 @@ jobs:
   #           archive_suffix: macos-intel
 
   #         - name: "macos-m1"
-  #           os: macos-14
+  #           os: macos-15
   #           target: aarch64-apple-darwin
   #           archive_suffix: macos-m1
 
   #         - name: "macos-m2"
-  #           os: macos-14
+  #           os: macos-15
   #           target: aarch64-apple-darwin
   #           archive_suffix: macos-m2
 
