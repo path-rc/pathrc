@@ -10,10 +10,10 @@ use std::fs;
 use zeroize::Zeroizing;
 
 /// A file in scope that may be evaluated: readable and allowed.
-struct Candidate {
-    file: ConfigFile,
-    bytes: Vec<u8>,
-    entry: Entry,
+pub struct Candidate {
+    pub file: ConfigFile,
+    pub bytes: Vec<u8>,
+    pub entry: Entry,
 }
 
 /// Prints the shell code that brings the shell from what it has loaded
@@ -61,7 +61,7 @@ pub fn handle_collate() {
 }
 
 /// The files that are readable and allowed, reporting the rest.
-fn candidates(files: &[ConfigFile], store: &Store) -> Vec<Candidate> {
+pub fn candidates(files: &[ConfigFile], store: &Store) -> Vec<Candidate> {
     let mut out = Vec::new();
     for file in files {
         let path = file.path.display();
@@ -95,7 +95,7 @@ fn candidates(files: &[ConfigFile], store: &Store) -> Vec<Candidate> {
 }
 
 /// The shell code a file contributes for `shell`, decrypting if needed.
-fn code_for(
+pub fn code_for(
     candidate: &Candidate,
     shell: Shell,
     identities: &mut Option<Result<Identities, String>>,

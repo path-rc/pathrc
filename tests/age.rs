@@ -231,3 +231,70 @@ fn an_ssh_ed25519_key_works_as_the_identity() {
         .unwrap()
         .contains("VIA_SSH=yes"));
 }
+
+#[test]
+fn show_prints_the_decrypted_cascade_for_a_shell() {
+    let env = Env::new();
+    let (root, inner) = mixed_tree(&env);
+    let output = env
+        .pathrc(root.path(), &inner)
+        .arg("show")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let shown = String::from_utf8(output.stdout).unwrap();
+    assert!(shown.starts_with(&format!(
+        "# File: {}\n",
+        root.path().join(".pathrc").display()
+    )));
+    // Evaluable as it stands, in order.
+    let script = format!("{shown}\necho \"$ORDER|$TOP_SECRET\"");
+    let evaluated = std::process::Command::new("bash")
+        .args(["-c", &script])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(evaluated.stdout).unwrap(),
+        "top-plain top-age mid-age in-plain|s1\n"
+    );
+
+    let zsh = env
+        .pathrc(root.path(), &inner)
+        .args(["show", "--shell", "zsh"])
+        .output()
+        .unwrap();
+    let zsh = String::from_utf8(zsh.stdout).unwrap();
+    assert!(
+        zsh.contains("ZSH_ONLY") && !zsh.contains("TOP_SECRET"),
+        "{zsh}"
+    );
+}
+
+#[test]
+fn show_fails_when_a_file_is_left_out() {
+    let env = Env::new();
+    let (root, inner) = mixed_tree(&env);
+    env.pathrc(&inner, &inner).arg("deny").assert().success();
+    let output = env
+        .pathrc(root.path(), &inner)
+        .arg("show")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let shown = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        shown.contains("top-age") && !shown.contains("in-plain"),
+        "{shown}"
+    );
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("not allowed"));
+
+    let uninit = env
+        .pathrc(root.path(), &inner)
+        .env_remove("PATHRC_SHELL")
+        .arg("show")
+        .output()
+        .unwrap();
+    assert!(!uninit.status.success());
+}

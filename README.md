@@ -164,6 +164,15 @@ This is the engine the `cd` hook runs. It works out which files have left
 scope or changed and which are new, and prints the shell code that unloads
 and loads them.
 
+#### Show
+
+`pathrc show` prints the configuration in scope, decrypted, as plain shell
+code: every allowed file, outermost first, each under a `# File:` comment.
+Use it to read what a directory sets up, or `eval "$(pathrc show)"` it in a
+script. `--shell zsh` shows another shell's sections. It exits 1 if any file
+was left out (not allowed, unreadable or undecryptable), naming each on
+stderr.
+
 #### Allow and deny
 
 See [Allowing files](#allowing-files).

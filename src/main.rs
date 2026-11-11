@@ -16,6 +16,7 @@ pub mod init;
 pub mod list;
 pub mod quote;
 pub mod shell;
+pub mod show;
 pub mod state;
 pub mod trust;
 pub mod undo;
@@ -41,10 +42,17 @@ struct Cli {
 enum Commands {
     /// Initialises the shell: add `eval "$(pathrc init)"` to your shell rc file
     Init(InitArgs),
-    /// Prints the shell code from every .pathrc in scope (run by the cd hook)
+    /// Prints the code that loads and unloads .pathrc files after a cd (run by the hook)
     Collate,
     /// Lists the .pathrc files in scope in processing order, with any problems
     List,
+    /// Prints the decrypted configuration in scope for a shell, as shell code
+    /// you can read or `eval`
+    Show {
+        /// The shell whose sections to print [default: PATHRC_SHELL]
+        #[arg(long, short, value_enum)]
+        shell: Option<ShowShell>,
+    },
     /// Allows files to be evaluated (default: the .pathrc and .pathrc.age here)
     Allow(FilesArgs),
     /// Stops files being evaluated (default: the .pathrc and .pathrc.age here)
@@ -58,6 +66,25 @@ enum Commands {
         /// The section marker prefix the snapshots use
         mark: String,
     },
+}
+
+#[derive(Copy, Clone, Debug, clap::ValueEnum)]
+enum ShowShell {
+    Sh,
+    Bash,
+    Zsh,
+    Fish,
+}
+
+impl From<ShowShell> for shell::Shell {
+    fn from(shell: ShowShell) -> Self {
+        match shell {
+            ShowShell::Sh => shell::Shell::Sh,
+            ShowShell::Bash => shell::Shell::Bash,
+            ShowShell::Zsh => shell::Shell::Zsh,
+            ShowShell::Fish => shell::Shell::Fish,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -85,6 +112,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Commands::List => handle_list(),
+        Commands::Show { shell } => show::handle_show(shell.map(Into::into)),
         Commands::Allow(args) => handle_allow(&args.files),
         Commands::Deny(args) => handle_deny(&args.files),
         Commands::Undo { shell, mark } => undo::handle_undo(
