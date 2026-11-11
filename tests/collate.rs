@@ -3,6 +3,14 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+/// A temporary directory named by its resolved path. On macOS the temp
+/// directory is under `/var`, a symlink to `/private/var`, and pathrc reports
+/// resolved paths.
+fn tempdir() -> tempfile::TempDir {
+    let base = std::env::temp_dir().canonicalize().unwrap();
+    tempfile::tempdir_in(base).unwrap()
+}
+
 fn pathrc(start: &Path, cwd: &Path) -> Command {
     let mut cmd = Command::cargo_bin("pathrc").unwrap();
     cmd.current_dir(cwd)
@@ -15,7 +23,7 @@ fn pathrc(start: &Path, cwd: &Path) -> Command {
 
 #[test]
 fn collate_skips_an_unreadable_file_and_loads_the_rest() {
-    let root = tempfile::tempdir().unwrap();
+    let root = tempdir();
     let middle = root.path().join("a");
     let inner = middle.join("b");
     fs::create_dir_all(&inner).unwrap();
@@ -51,7 +59,7 @@ fn collate_skips_an_unreadable_file_and_loads_the_rest() {
 
 #[test]
 fn collate_without_init_writes_nothing_to_stdout() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let output = Command::cargo_bin("pathrc")
         .unwrap()
         .current_dir(dir.path())
@@ -66,7 +74,7 @@ fn collate_without_init_writes_nothing_to_stdout() {
 
 #[test]
 fn collate_with_an_unknown_shell_does_not_panic() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let output = pathrc(dir.path(), dir.path())
         .env("PATHRC_SHELL", "tcsh")
         .arg("collate")
