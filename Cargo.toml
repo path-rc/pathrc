@@ -15,6 +15,7 @@ description = "Command line utility to provide per path configurations for alias
 [dependencies]
 age = { version = "0.12", features = ["ssh", "armor", "cli-common", "plugin"] }
 clap = { version = "4.5.4", features = ["cargo", "derive", "env"] }
+ctrlc = "3"
 rust-embed = "8.3.0"
 sha2 = "0.10"
 tempfile = "3"
