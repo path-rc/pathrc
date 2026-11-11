@@ -79,11 +79,31 @@ Migrating from the per-shell files (`.pathrc-bash`, `.pathrc-zsh`,
 The search traverses parent directories up to and including the directory
 specified in the `PATHRC_START` environment variable.
 
+### Allowing files
+
+pathrc evaluates its files on every `cd`, so a cloned repository containing a
+`.pathrc` could otherwise run code the moment you enter it. A file is only
+evaluated once you have read it and allowed it:
+
+```shell
+pathrc allow            # the .pathrc in this directory
+pathrc allow path/to/.pathrc
+pathrc deny             # stop evaluating it
+```
+
+pathrc records each allowed file's path and SHA-256 in
+`$XDG_DATA_HOME/pathrc/allowed` (`~/.local/share/pathrc/allowed`). Editing a
+file means allowing it again; until then `cd` skips it with a hint on stderr,
+and `pathrc list` marks it `[changed]` (or `[untrusted]` if never allowed).
+
+**Upgrading:** existing files are not allowed yet. Run `pathrc allow` once in
+each directory that has a `.pathrc`.
+
 ### Commands
 
 #### Init
 
-There are three commands the most important of which is `init` which initialises
+The most important command of which is `init` which initialises
 the shell to use pathrc. By default, without any arguments `init` will try to
 determine the shell from the SHELL environment variable. In some cases there may
 be a need to explicitly specify the shell, i.e. if the SHELL environment is
@@ -95,6 +115,10 @@ bash with the `Bourne` shell. NOTE this is completely untested!
 
 This is the engine that collates all the pathrc configuration files which get
 evaluated into the shell when changing directory.
+
+#### Allow and deny
+
+See [Allowing files](#allowing-files).
 
 #### List
 
