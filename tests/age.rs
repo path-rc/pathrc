@@ -7,6 +7,14 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+/// A temporary directory named by its resolved path. On macOS the temp
+/// directory is under `/var`, a symlink to `/private/var`, and pathrc reports
+/// resolved paths.
+fn tempdir() -> tempfile::TempDir {
+    let base = std::env::temp_dir().canonicalize().unwrap();
+    tempfile::tempdir_in(base).unwrap()
+}
+
 struct Env {
     home: tempfile::TempDir,
     identity: PathBuf,
@@ -16,7 +24,7 @@ struct Env {
 impl Env {
     /// A scratch HOME with a fresh age X25519 identity in PATHRC_IDENTITY.
     fn new() -> Env {
-        let home = tempfile::tempdir().unwrap();
+        let home = tempdir();
         let key = age::x25519::Identity::generate();
         let identity = home.path().join("identity.txt");
         fs::write(&identity, format!("{}\n", key.to_string().expose_secret())).unwrap();
@@ -74,7 +82,7 @@ fn seal_to(dir: &Path, plain: &str, recipient: &dyn age::Recipient) -> PathBuf {
 
 /// top: plain + age, top/mid: age only, top/mid/in: plain only.
 fn mixed_tree(env: &Env) -> (tempfile::TempDir, PathBuf) {
-    let root = tempfile::tempdir().unwrap();
+    let root = tempdir();
     let mid = root.path().join("mid");
     let inner = mid.join("in");
     fs::create_dir_all(&inner).unwrap();
@@ -214,7 +222,7 @@ fn an_ssh_ed25519_key_works_as_the_identity() {
     }
     let public = fs::read_to_string(key.with_extension("pub")).unwrap();
     let recipient: age::ssh::Recipient = public.trim().parse().unwrap();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     seal_to(dir.path(), "export VIA_SSH=yes\n", &recipient);
     env.allow_all(dir.path());
 
