@@ -118,5 +118,51 @@ else
   echo "skip: age CLI not installed"
 fi
 
+# Unloading on leaving scope (bash and zsh): a three-level tree mixing plain
+# and encrypted files, siblings, an inner override of an outer variable, and
+# aliases and functions.
+uw=$scratch/unload
+mkdir -p "$uw/client/api" "$uw/client/web" "$uw/other"
+cat > "$uw/.pathrc" <<'PATHRC'
+export REGION=eu
+#sh
+alias where='echo top'
+PATHRC
+cat > "$uw/client/.pathrc" <<'PATHRC'
+export REGION=us CLIENT=acme
+#sh
+client_fn() { echo client; }
+PATHRC
+echo 'export API=1 REGION=api' > "$uw/client/api/.pathrc"
+echo 'export WEB=1' > "$uw/client/web/.pathrc"
+if command -v age > /dev/null && [[ -f $XDG_CONFIG_HOME/pathrc/identity ]]; then
+  printf 'export CLIENT_TOKEN=secret\n' |
+    age -a -r "$(age-keygen -y "$XDG_CONFIG_HOME/pathrc/identity")" > "$uw/client/.pathrc.age"
+  token=secret
+else
+  token= # no age CLI: the tree is plain only
+fi
+for d in "$uw" "$uw/client" "$uw/client/api" "$uw/client/web"; do (cd "$d" && pathrc allow > /dev/null); done
+
+state='echo "${REGION-}|${CLIENT-}|${CLIENT_TOKEN-}|${API-}|${WEB-}|$(alias where 2>/dev/null | sed "s/.*=//")|$(type client_fn > /dev/null 2>&1 && echo fn)"'
+for sh in bash zsh; do
+  command -v "$sh" > /dev/null || continue
+  out=$(cd "$uw" && "$sh" -c "eval \"\$(pathrc init $sh)\"; s() { $state; }
+    s; cd client/api; s; cd ../web; s; cd ../..; s; cd other; s; cd ..; cd ..; s" 2>&1)
+  expected="eu|||||'echo top'|
+api|acme|$token|1||'echo top'|fn
+us|acme|$token||1|'echo top'|fn
+eu|||||'echo top'|
+eu|||||'echo top'|
+||||||"
+  check "$sh: leaving scope unloads, sideways swaps, overrides restore" "$expected" "$out"
+done
+
+# cd within the same scope decrypts nothing; entering it decrypts once.
+if [[ -n $token ]]; then
+  out=$(cd "$uw/client" && PATHRC_DEBUG=1 bash -c 'eval "$(pathrc init bash)"; cd api; cd ..; cd api; cd web 2>/dev/null; cd ../web' 2>&1)
+  check "bash: no decryption while staying in scope" "1" "$(grep -c 'decrypting' <<< "$out")"
+fi
+
 echo "$pass passed, $fail failed"
 [[ $fail == 0 ]]

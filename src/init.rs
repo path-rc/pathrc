@@ -1,80 +1,93 @@
+use crate::quote::quote;
+use crate::shell::Shell;
 use crate::InitArgs;
 use clap::ValueEnum;
-use envmnt;
 use rust_embed::RustEmbed;
-use std::{env, str};
+use std::process::ExitCode;
 
 #[derive(RustEmbed)]
 #[folder = "init/"]
 struct Asset;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
-pub enum Shell {
-    /// Shared Bash and Zsh compatible Bourne shells
+pub enum InitShell {
+    /// Bash or Zsh, reading only the common and #sh sections
     Sh,
     /// Bash Shell
     Bash,
-    /// Fish shell (experimental)
+    /// Fish shell (loads files but does not unload them)
     Fish,
     /// Z Shell
     Zsh,
-    /// Default selected from environment
+    /// Default selected from the SHELL environment variable
     Env,
 }
 
-pub fn get_shell_name(shell: Shell) -> String {
+impl InitShell {
+    fn resolve(self) -> Result<Shell, String> {
+        match self {
+            InitShell::Sh => Ok(Shell::Sh),
+            InitShell::Bash => Ok(Shell::Bash),
+            InitShell::Fish => Ok(Shell::Fish),
+            InitShell::Zsh => Ok(Shell::Zsh),
+            InitShell::Env => {
+                let shell = std::env::var("SHELL").unwrap_or_default();
+                let name = shell.rsplit('/').next().unwrap_or_default();
+                match Shell::from_name(name) {
+                    Some(Shell::Sh) | None => Err(format!(
+                        "cannot tell the shell from SHELL='{shell}'; \
+                         name it: pathrc init bash|zsh|fish|sh"
+                    )),
+                    Some(found) => Ok(found),
+                }
+            }
+        }
+    }
+}
+
+/// The hook script for a shell, embedded from `init/`.
+fn script(shell: Shell) -> String {
+    let asset = Asset::get(&format!("pathrc.{shell}.cfg")).expect("every shell has a script");
+    String::from_utf8_lossy(&asset.data).into_owned()
+}
+
+pub fn handle_init(args: &InitArgs) -> ExitCode {
+    if let Some(shell) = args.script {
+        // Used by the sh script, which picks bash's or zsh's at runtime.
+        match shell.resolve() {
+            Ok(shell) => print!("{}", script(shell)),
+            Err(message) => {
+                eprintln!("pathrc: {message}");
+                return ExitCode::FAILURE;
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
+    let shell = match args.shell.resolve() {
+        Ok(shell) => shell,
+        Err(message) => {
+            eprintln!("pathrc: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let start = match std::env::current_dir() {
+        Ok(start) => start.to_string_lossy().into_owned(),
+        Err(error) => {
+            eprintln!("pathrc: cannot read the current directory: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (start, name) = (quote(&start, shell), quote(shell.name(), shell));
     match shell {
-        Shell::Sh => String::from("sh"),
-        Shell::Bash => String::from("bash"),
-        Shell::Fish => String::from("fish"),
-        Shell::Zsh => String::from("zsh"),
-        Shell::Env => String::from("env"),
-    }
-}
-
-/// The configuration file name for a shell, or `None` for a shell pathrc
-/// doesn't know (a hand-set or stale `PATHRC_SHELL`).
-pub fn print_init_script(shell: String) {
-    let base: &str = "pathrc.";
-    let filename = format!("{base}{shell}.cfg");
-    let script_name: &str = &filename;
-    let script = Asset::get(script_name).unwrap();
-    let string_data = str::from_utf8(script.data.as_ref());
-    print!("{}", string_data.unwrap());
-}
-
-pub fn get_shell_from_env() -> String {
-    let shell_env = envmnt::get_or("SHELL", "NONE");
-    let (_, shell_name) = shell_env.rsplit_once('/').unwrap();
-    match shell_name {
-        "bash" => "bash".to_string(),
-        "fish" => "fish".to_string(),
-        "zsh" => "zsh".to_string(),
-        _ => panic!(
-            "ISSUE: Unable to determine shell from environment \
-            or shell is not currently supported '{}'. If this is a \
-            supported shell then add as argument",
-            shell_env
-        ),
-    }
-}
-
-pub fn handle_init(init_args: &InitArgs) {
-    let shell = get_shell_name(init_args.shell);
-    let start_dir = env::current_dir()
-        .expect("ISSUE: Unable to determine the current working directory during init");
-    let start_dir = start_dir.to_string_lossy();
-    match shell.as_str() {
-        "env" => {
-            let env_shell: String = get_shell_from_env();
-            println!("export PATHRC_START={start_dir:?}");
-            println!("export PATHRC_SHELL={:?}", env_shell);
-            print_init_script(env_shell);
+        Shell::Fish => {
+            println!("set -gx PATHRC_START {start}");
+            println!("set -gx PATHRC_SHELL {name}");
         }
         _ => {
-            println!("export PATHRC_START={start_dir:?}");
-            println!("export PATHRC_SHELL={:?}", shell);
-            print_init_script(shell);
+            println!("export PATHRC_START={start}");
+            println!("export PATHRC_SHELL={name}");
         }
     }
+    print!("{}", script(shell));
+    ExitCode::SUCCESS
 }

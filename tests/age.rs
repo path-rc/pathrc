@@ -59,6 +59,19 @@ impl Env {
     }
 }
 
+/// Evaluates collate's output in bash with stand-in load functions, then
+/// runs `then`, returning its stdout.
+fn eval_in_bash(collated: &str, then: &str) -> String {
+    let script = format!(
+        "__pathrc_load() {{ eval \"$3\"; }}; __pathrc_unload() {{ :; }}; eval \"$1\"; {then}"
+    );
+    let output = std::process::Command::new("bash")
+        .args(["-c", &script, "_", collated])
+        .output()
+        .unwrap();
+    String::from_utf8(output.stdout).unwrap()
+}
+
 fn seal_to(dir: &Path, plain: &str, recipient: &dyn age::Recipient) -> PathBuf {
     let encryptor = age::Encryptor::with_recipients(std::iter::once(recipient)).unwrap();
     let mut out = Vec::new();
@@ -97,23 +110,10 @@ fn encrypted_files_at_any_level_are_decrypted_in_order() {
     let (root, inner) = mixed_tree(&env);
     let (stdout, stderr) = env.collate(root.path(), &inner);
     assert!(stderr.is_empty(), "{stderr}");
-    let order: Vec<_> = stdout
-        .lines()
-        .filter(|l| l.starts_with("export ORDER"))
-        .collect();
     assert_eq!(
-        order,
-        [
-            "export ORDER=top-plain",
-            "export ORDER=\"$ORDER top-age\"",
-            "export ORDER=\"$ORDER mid-age\"",
-            "export ORDER=\"$ORDER in-plain\"",
-        ]
-    );
-    assert!(stdout.contains("export TOP_SECRET=s1"));
-    assert!(
-        !stdout.contains("ZSH_ONLY"),
-        "sections apply inside .age files too"
+        eval_in_bash(&stdout, "echo \"$ORDER|$TOP_SECRET|${ZSH_ONLY-}\""),
+        "top-plain top-age mid-age in-plain|s1|\n",
+        "in order, and sections apply inside .age files too"
     );
 }
 
