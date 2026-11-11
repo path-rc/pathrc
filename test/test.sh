@@ -164,5 +164,9 @@ if [[ -n $token ]]; then
   check "bash: no decryption while staying in scope" "1" "$(grep -c 'decrypting' <<< "$out")"
 fi
 
+# show prints the cascade as plain code that can be evaluated.
+check "bash: eval \$(pathrc show) gives the same values" "sub yes" \
+  "$(cd "$tree/project/sub" && PATHRC_SHELL=bash PATHRC_START=$tree bash -c 'eval "$(pathrc show)"; echo "$LEVEL $TOP_SH"' 2>&1)"
+
 echo "$pass passed, $fail failed"
 [[ $fail == 0 ]]
