@@ -7,6 +7,14 @@ use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+/// A temporary directory named by its resolved path. On macOS the temp
+/// directory is under `/var`, a symlink to `/private/var`, and pathrc reports
+/// resolved paths.
+fn tempdir() -> tempfile::TempDir {
+    let base = std::env::temp_dir().canonicalize().unwrap();
+    tempfile::tempdir_in(base).unwrap()
+}
+
 struct Env {
     home: tempfile::TempDir,
     key: age::x25519::Identity,
@@ -15,7 +23,7 @@ struct Env {
 impl Env {
     fn new() -> Env {
         let env = Env {
-            home: tempfile::tempdir().unwrap(),
+            home: tempdir(),
             key: age::x25519::Identity::generate(),
         };
         let config = env.home.path().join("config/pathrc");
@@ -112,7 +120,7 @@ fn assert_no_temp_left(env: &Env) {
 #[test]
 fn encrypt_then_decrypt_round_trip_keeps_trust() {
     let env = Env::new();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     fs::write(dir.path().join(".pathrc"), "export SECRET=1\n").unwrap();
     env.pathrc(dir.path()).arg("allow").assert().success();
 
@@ -148,7 +156,7 @@ fn encrypt_then_decrypt_round_trip_keeps_trust() {
 #[test]
 fn encrypting_an_unallowed_file_does_not_allow_it() {
     let env = Env::new();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     fs::write(dir.path().join(".pathrc"), "export X=1\n").unwrap();
     let out = env.pathrc(dir.path()).arg("encrypt").output().unwrap();
     assert!(out.status.success());
@@ -163,7 +171,7 @@ fn recipients_file_and_rekey() {
     let env = Env::new();
     let alice = age::x25519::Identity::generate();
     let bob = age::x25519::Identity::generate();
-    let team = tempfile::tempdir().unwrap();
+    let team = tempdir();
     let project = team.path().join("project");
     fs::create_dir_all(&project).unwrap();
     // The nearest .pathrc-recipients up the hierarchy wins.
@@ -201,7 +209,7 @@ fn recipients_file_and_rekey() {
 #[test]
 fn edit_an_encrypted_file_in_a_private_temp_file() {
     let env = Env::new();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let editor = env.editor("append.sh", "printf 'export ADDED=1\\n' >> \"$1\"");
     env.pathrc(dir.path())
         .args(["edit", "--encrypt"])
@@ -244,7 +252,7 @@ fn edit_an_encrypted_file_in_a_private_temp_file() {
 #[test]
 fn invalid_structure_is_not_saved_without_a_terminal() {
     let env = Env::new();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     fs::write(dir.path().join(".pathrc"), "export A=1\n").unwrap();
     let editor = env.editor("typo.sh", "printf '#bahs\\nexport B=1\\n' >> \"$1\"");
     let out = env
@@ -269,7 +277,7 @@ fn invalid_structure_is_not_saved_without_a_terminal() {
 #[test]
 fn a_failing_or_interrupted_editor_saves_nothing_and_cleans_up() {
     let env = Env::new();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     env.pathrc(dir.path())
         .arg("edit")
         .arg("--encrypt")
@@ -308,7 +316,7 @@ fn a_failing_or_interrupted_editor_saves_nothing_and_cleans_up() {
 #[test]
 fn edit_refuses_disk_temp_for_encrypted_files_without_runtime_dir() {
     let env = Env::new();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let out = env
         .pathrc(dir.path())
         .args(["edit", "--encrypt"])
