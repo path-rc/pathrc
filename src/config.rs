@@ -307,6 +307,9 @@ pub fn describe(problems: &[Problem]) -> String {
 struct Checker<'a> {
     text: &'a str,
     problems: Vec<Problem>,
+    /// `.enc` values are shown decrypted (`pathrc edit`), so they are
+    /// checked as text rather than as age messages.
+    revealed: bool,
 }
 
 impl Checker<'_> {
@@ -358,14 +361,22 @@ impl Checker<'_> {
         }
     }
 
+    fn enc_value(&mut self, value: &Text) {
+        if self.revealed {
+            self.no_nul(value);
+        } else {
+            self.age_value(value);
+        }
+    }
+
     /// One line of base64 that decodes to an age message.
     fn age_value(&mut self, value: &Text) {
         let decoded = base64::engine::general_purpose::STANDARD.decode(value.get_ref());
         if !decoded.is_ok_and(|bytes| bytes.starts_with(b"age-encryption.org/v1\n")) {
             self.at(
                 value.span().start,
-                "not an encrypted value: expected one line of base64 age, \
-                 e.g. from `printf %s VALUE | age -r RECIPIENT | base64`"
+                "not an encrypted value: expected one line of base64 age; \
+                 add one with `pathrc secret NAME`, or edit with `pathrc edit`"
                     .to_string(),
             );
         }
@@ -404,11 +415,11 @@ impl Checker<'_> {
         if let Some(enc) = &table.enc {
             for (name, value) in &enc.env {
                 self.env_name(name, "env.");
-                self.age_value(value);
+                self.enc_value(value);
             }
             for (name, value) in &enc.var {
                 self.env_name(name, "var.");
-                self.age_value(value);
+                self.enc_value(value);
             }
             self.both(&enc.env, &enc.var);
         }
@@ -444,9 +455,14 @@ impl Checker<'_> {
 /// Parses and checks a file's text. `dir` is the file's directory, for
 /// relative `path.prepend` entries.
 pub fn parse(text: &str, dir: &Path) -> Result<Config, Vec<Problem>> {
+    check(text, dir, false)
+}
+
+fn check(text: &str, dir: &Path, revealed: bool) -> Result<Config, Vec<Problem>> {
     let mut checker = Checker {
         text,
         problems: Vec::new(),
+        revealed,
     };
     let document: Document = match toml::from_str(text) {
         Ok(document) => document,
@@ -488,15 +504,26 @@ pub fn parse(text: &str, dir: &Path) -> Result<Config, Vec<Problem>> {
     }
 }
 
-/// The problems in a file's bytes, for `list`, `edit` and `encrypt`.
+/// The problems in a file's bytes, for `list`, `secret` and `rekey`.
 pub fn validate(bytes: &[u8]) -> Vec<Problem> {
+    validate_with(bytes, false)
+}
+
+/// The same for `edit`'s copy, whose `.enc` values are shown decrypted.
+pub fn validate_revealed(bytes: &[u8]) -> Vec<Problem> {
+    validate_with(bytes, true)
+}
+
+fn validate_with(bytes: &[u8], revealed: bool) -> Vec<Problem> {
     match std::str::from_utf8(bytes) {
         Err(error) => vec![Problem {
             line: 0,
             column: 0,
             message: format!("not UTF-8 text ({error})"),
         }],
-        Ok(text) => parse(text, Path::new("/")).err().unwrap_or_default(),
+        Ok(text) => check(text, Path::new("/"), revealed)
+            .err()
+            .unwrap_or_default(),
     }
 }
 

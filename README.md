@@ -131,34 +131,38 @@ env.AWS_ACCOUNT_ID = "YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBu…"
 var.API_TOKEN = "YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBv…"
 ```
 
-Until `pathrc secret` arrives, make a value with the age CLI:
+Add one without ever seeing its ciphertext, or put it in your shell's
+history:
 
 ```shell
-printf %s 'the-secret' | age -r "$(age-keygen -y ~/.config/pathrc/identity)" | base64 | tr -d '\n'
+pathrc secret AWS_ACCOUNT_ID           # prompts without echo; env.NAME in [common.enc]
+pathrc secret API_TOKEN --var          # var.NAME: not exported
+pathrc secret TOKEN --table zsh        # in [zsh.enc]
+some-password-manager get token | pathrc secret TOKEN   # or from stdin
 ```
 
 `pathrc list` shows how many encrypted values a file has, without decrypting.
 If a value can't be decrypted, the file is skipped and the value is named.
+See [Working with secrets](#working-with-secrets) for editing them.
 
 `pathrc list` and `pathrc edit` report a mistake with its line and column:
 an unknown table or key, a value that is not a string, or a name that is not
 a valid variable or alias name.
 
-The marker-section `.pathrc` files of pathrc 0.1 are no longer read;
-`pathrc list` marks them `[old format: convert it to .pathrc.toml]`. Move their `export` and `alias`
-lines into a `.pathrc.toml`.
+Files of older versions are no longer read, and `pathrc list` marks them:
+the marker-section `.pathrc` and `.pathrc.age` of pathrc 0.1 (move their
+`export` and `alias` lines into a `.pathrc.toml`), and the whole-file
+`.pathrc.toml.age` of 0.3 to 0.5 (move its values into `.enc` tables, for
+example with `pathrc secret`).
 
 The search traverses parent directories up to and including the directory
 specified in the `PATHRC_START` environment variable.
 
-### Encrypted files
+### Secrets and identities
 
-A directory may also hold `.pathrc.toml.age`: a `.pathrc.toml` encrypted
-with [age](https://age-encryption.org). It is read after the plain
-`.pathrc.toml` in the same directory, so a secret can override a default.
-pathrc decrypts it in memory; the plaintext is never written to disk.
-
-pathrc uses the first identity it finds:
+`.enc` values are encrypted with [age](https://age-encryption.org) and
+decrypted in memory when you enter the directory; the plaintext is never
+written to disk. pathrc uses the first identity it finds:
 
 1. the file named in `PATHRC_IDENTITY`;
 2. `~/.config/pathrc/identity` (`$XDG_CONFIG_HOME/pathrc/identity`);
@@ -166,29 +170,30 @@ pathrc uses the first identity it finds:
 
 An age identity (`age-keygen -o ~/.config/pathrc/identity`) or an
 unencrypted ssh-ed25519 or ssh-rsa key works. A passphrase-protected identity
-prompts on the terminal; plugin identities such as `age-plugin-yubikey` work
-if the plugin is on your `PATH`. A file that can't be decrypted is reported
-on stderr and skipped; the other files still load. `pathrc list` marks
-encrypted files `[age]` without decrypting them.
+prompts on the terminal, once per run; plugin identities such as
+`age-plugin-yubikey` work if the plugin is on your `PATH`, and may prompt
+once per value. A file whose values can't be decrypted is reported on stderr
+and skipped; the other files still load.
 
-#### Working with encrypted files
+#### Working with secrets
 
 ```shell
-pathrc edit --encrypt       # create .pathrc.toml.age here in $EDITOR
-pathrc edit                 # edit .pathrc.toml.age (or .pathrc.toml) here
-pathrc encrypt              # .pathrc.toml -> .pathrc.toml.age, removing the plaintext
-pathrc decrypt              # .pathrc.toml.age -> .pathrc.toml
-pathrc rekey                # re-encrypt after the recipients change
+pathrc secret NAME          # add or replace one value, typed without echo
+pathrc edit                 # edit .pathrc.toml here, secrets shown decrypted
+pathrc rekey                # re-encrypt every value after the recipients change
 ```
 
-`edit` decrypts into a private temporary file (mode 0600 in
-`$XDG_RUNTIME_DIR/pathrc`, normally RAM-backed), opens `$VISUAL`, `$EDITOR`
-or `vi`, checks the file when you save, and encrypts the result again. If
-something is wrong it reopens the editor with the problems noted at the top. The temporary file is removed however the edit ends, Ctrl-C
-included. Without `XDG_RUNTIME_DIR` it refuses to put decrypted text on disk
-unless you pass `--tmp-ok`.
+`edit` copies the file into a private temporary file (mode 0600 in
+`$XDG_RUNTIME_DIR/pathrc`, normally RAM-backed) with its `.enc` values
+decrypted, opens `$VISUAL`, `$EDITOR` or `vi`, and checks the file when you
+save. Values you added or changed in `.enc` tables are encrypted; the ones
+you left alone keep their ciphertext, so a diff shows only what changed. If
+something is wrong it reopens the editor with the problems noted at the top.
+The temporary file is removed however the edit ends, Ctrl-C included. A file
+with secrets is only decrypted under `XDG_RUNTIME_DIR`; without it, pass
+`--tmp-ok` to use the system temp directory.
 
-Files are encrypted for the recipients in the nearest `.pathrc-recipients`
+Values are encrypted for the recipients in the nearest `.pathrc-recipients`
 up the directory tree, one age or SSH public key per line, so a team
 project can list everyone's keys:
 
@@ -198,14 +203,12 @@ age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq   # alice
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyForBob bob@laptop
 ```
 
-With no recipients file, a file is encrypted for your own identity. After
+With no recipients file, values are encrypted for your own identity. After
 changing a recipients file, run `pathrc rekey` in each directory below it.
 
-A file pathrc writes for you (`edit`) is allowed. `encrypt`, `decrypt` and
-`rekey` keep a file allowed only if it was allowed before.
-
-`encrypt` deletes the plaintext; it does not overwrite it on disk first, so
-on most filesystems the old blocks remain until reused.
+A file `edit` writes is allowed, and so is a new file `secret` creates.
+`secret` and `rekey` keep an existing file allowed only if it was allowed
+before.
 
 ### Leaving a directory
 
@@ -240,7 +243,7 @@ a command you use the moment you enter it. A file is only applied once you
 have read it and allowed it:
 
 ```shell
-pathrc allow            # the .pathrc.toml and .pathrc.toml.age in this directory
+pathrc allow            # the .pathrc.toml in this directory
 pathrc allow path/to/.pathrc.toml
 pathrc deny             # stop applying it
 ```
@@ -271,9 +274,9 @@ This is the engine the `cd` hook runs. When the files in scope have changed
 it prints the shell code that leaves the files no longer in scope, innermost
 first, and enters the new ones.
 
-#### Edit, encrypt, decrypt and rekey
+#### Edit, secret and rekey
 
-See [Working with encrypted files](#working-with-encrypted-files).
+See [Working with secrets](#working-with-secrets).
 
 #### Show
 
@@ -341,8 +344,8 @@ working directory.
 
 #### PATHRC_IDENTITY
 
-The age identity file for decrypting `.pathrc.toml.age` files. See
-[Encrypted files](#encrypted-files).
+The age identity file for decrypting `.enc` values. See
+[Secrets and identities](#secrets-and-identities).
 
 #### PATHRC_STATE
 

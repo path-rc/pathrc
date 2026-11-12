@@ -70,7 +70,7 @@ pub fn handle_collate() {
 /// the entries of the files that were applied and whether all were. Files
 /// that cannot be decrypted or parsed are reported on stderr and skipped.
 pub fn fold(candidates: &[Candidate], shell: Shell) -> (Wanted, Vec<Entry>, bool) {
-    // Read lazily, so a scope with no encrypted file never touches (or
+    // Read lazily, so a scope with no encrypted value never touches (or
     // prompts for) the identity, and read at most once per run.
     let mut identities: Option<Result<Identities, String>> = None;
     let mut wanted = Wanted::default();
@@ -126,7 +126,7 @@ pub fn candidates(files: &[ConfigFile], store: &Store) -> Vec<Candidate> {
 }
 
 /// Decrypts with the identity, loading it on first use: a scope with no
-/// encrypted file or value never touches (or prompts for) it, and it is
+/// encrypted value never touches (or prompts for) it, and it is
 /// loaded at most once per run.
 fn decrypt_with(
     identities: &mut Option<Result<Identities, String>>,
@@ -141,8 +141,8 @@ fn decrypt_with(
         .map_err(|e| format!("cannot decrypt: {e}"))
 }
 
-/// The settings a file contributes for `shell`, decrypting the file or its
-/// `.enc` values if needed.
+/// The settings a file contributes for `shell`, decrypting its `.enc`
+/// values if needed.
 pub fn layer_for(
     candidate: &Candidate,
     shell: Shell,
@@ -150,17 +150,7 @@ pub fn layer_for(
 ) -> Result<Layer, String> {
     let debug = std::env::var_os("PATHRC_DEBUG").is_some();
     let path = candidate.file.path.display();
-    let plain;
-    let bytes: &[u8] = if candidate.file.encrypted {
-        if debug {
-            eprintln!("pathrc: decrypting {path}");
-        }
-        plain = decrypt_with(identities, &candidate.bytes)?;
-        &plain
-    } else {
-        &candidate.bytes
-    };
-    let text = std::str::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_string())?;
+    let text = std::str::from_utf8(&candidate.bytes).map_err(|_| "not UTF-8 text".to_string())?;
     let dir = candidate
         .file
         .path

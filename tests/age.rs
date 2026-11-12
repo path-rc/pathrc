@@ -1,4 +1,4 @@
-//! Encrypted `.pathrc.toml.age` files and `.enc` values in `collate`,
+//! Encrypted `.enc` values in `collate`,
 //! `list` and `show`.
 
 use age::secrecy::ExposeSecret;
@@ -50,8 +50,9 @@ impl Env {
         cmd
     }
 
-    fn seal(&self, dir: &Path, plain: &str) -> PathBuf {
-        seal_to(dir, plain, self.recipient.as_ref())
+    /// One `.enc` value for this user.
+    fn seal(&self, plain: &str) -> String {
+        seal_value(plain, self.recipient.as_ref())
     }
 
     fn allow_all(&self, dir: &Path) {
@@ -93,39 +94,35 @@ fn eval_in_bash(collated: &str, then: &str) -> String {
 /// The variables the mixed tree sets, in one line.
 const CHECK: &str = "echo \"$LAST|$WITHIN|$TOP|${MID-}|${IN-}|${TOP_SECRET-}|${ZSH_ONLY-}\"";
 
-fn seal_to(dir: &Path, plain: &str, recipient: &dyn age::Recipient) -> PathBuf {
-    let encryptor = age::Encryptor::with_recipients(std::iter::once(recipient)).unwrap();
-    let mut out = Vec::new();
-    let armor =
-        age::armor::ArmoredWriter::wrap_output(&mut out, age::armor::Format::AsciiArmor).unwrap();
-    let mut writer = encryptor.wrap_output(armor).unwrap();
-    writer.write_all(plain.as_bytes()).unwrap();
-    writer.finish().unwrap().finish().unwrap();
-    let path = dir.join(".pathrc.toml.age");
-    fs::write(&path, out).unwrap();
-    path
-}
-
-/// top: plain + age, top/mid: age only, top/mid/in: plain only.
+/// top: plain and .enc values, top/mid: .enc only, top/mid/in: plain only.
 fn mixed_tree(env: &Env) -> (tempfile::TempDir, PathBuf) {
     let root = tempdir();
     let mid = root.path().join("mid");
     let inner = mid.join("in");
     fs::create_dir_all(&inner).unwrap();
-    // Each file overrides LAST; WITHIN shows .age comes after plain.
+    // Each file overrides LAST; WITHIN shows a table's .enc comes after it.
     fs::write(
         root.path().join(".pathrc.toml"),
-        "[common]\nenv.LAST = \"top-plain\"\nenv.WITHIN = \"plain\"\nenv.TOP = \"top-plain\"\n",
+        format!(
+            "[common]\nenv.LAST = \"top-plain\"\nenv.WITHIN = \"plain\"\nenv.TOP = \"top-plain\"\n\
+             [common.enc]\nenv.LAST = \"{}\"\nenv.WITHIN = \"{}\"\n\
+             [bash.enc]\nenv.TOP_SECRET = \"{}\"\n[zsh.enc]\nenv.ZSH_ONLY = \"{}\"\n",
+            env.seal("top-age"),
+            env.seal("age"),
+            env.seal("s1"),
+            env.seal("no"),
+        ),
     )
     .unwrap();
-    env.seal(
-        root.path(),
-        "[common]\nenv.LAST = \"top-age\"\nenv.WITHIN = \"age\"\n[bash]\nenv.TOP_SECRET = \"s1\"\n[zsh]\nenv.ZSH_ONLY = \"no\"\n",
-    );
-    env.seal(
-        &mid,
-        "[common]\nenv.LAST = \"mid-age\"\nenv.MID = \"mid-age\"\n",
-    );
+    fs::write(
+        mid.join(".pathrc.toml"),
+        format!(
+            "[common.enc]\nenv.LAST = \"{}\"\nenv.MID = \"{}\"\n",
+            env.seal("mid-age"),
+            env.seal("mid-age"),
+        ),
+    )
+    .unwrap();
     fs::write(
         inner.join(".pathrc.toml"),
         "[common]\nenv.LAST = \"in-plain\"\nenv.IN = \"in-plain\"\n",
@@ -146,12 +143,12 @@ fn encrypted_files_at_any_level_are_decrypted_in_order() {
     assert_eq!(
         eval_in_bash(&stdout, CHECK),
         "in-plain|age|top-plain|mid-age|in-plain|s1|\n",
-        "in order, and shell tables apply inside .age files too"
+        "in order, and shell tables have .enc tables too"
     );
 }
 
 #[test]
-fn list_marks_encrypted_files_without_decrypting() {
+fn list_counts_encrypted_values_without_decrypting() {
     let env = Env::new();
     let (root, inner) = mixed_tree(&env);
     // No identity at all: list must still work, so it isn't decrypting.
@@ -165,19 +162,19 @@ fn list_marks_encrypted_files_without_decrypting() {
     assert!(output.status.success());
     assert!(
         listed.contains(&format!(
-            "{}  [age]",
-            root.path().join(".pathrc.toml.age").display()
+            "{}  [4 encrypted values]",
+            root.path().join(".pathrc.toml").display()
         )),
         "{listed}"
     );
     assert!(
-        listed.contains(&format!("{}\n", root.path().join(".pathrc.toml").display())),
+        listed.contains(&format!("{}\n", inner.join(".pathrc.toml").display())),
         "{listed}"
     );
 }
 
 #[test]
-fn a_wrong_or_missing_identity_reports_and_still_loads_plain_files() {
+fn a_wrong_or_missing_identity_skips_files_with_secrets_and_loads_the_rest() {
     let env = Env::new();
     let (root, inner) = mixed_tree(&env);
 
@@ -196,7 +193,7 @@ fn a_wrong_or_missing_identity_reports_and_still_loads_plain_files() {
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert_eq!(
             eval_in_bash(&stdout, CHECK),
-            "in-plain|plain|top-plain||in-plain||\n",
+            "in-plain||||in-plain||\n",
             "{stdout}"
         );
         assert_eq!(stderr.matches("cannot decrypt").count(), 2, "{stderr}");
@@ -248,7 +245,14 @@ fn an_ssh_ed25519_key_works_as_the_identity() {
     let public = fs::read_to_string(key.with_extension("pub")).unwrap();
     let recipient: age::ssh::Recipient = public.trim().parse().unwrap();
     let dir = tempdir();
-    seal_to(dir.path(), "[common]\nenv.VIA_SSH = \"yes\"\n", &recipient);
+    fs::write(
+        dir.path().join(".pathrc.toml"),
+        format!(
+            "[common.enc]\nenv.VIA_SSH = \"{}\"\n",
+            seal_value("yes", &recipient)
+        ),
+    )
+    .unwrap();
     env.allow_all(dir.path());
 
     // Found as ~/.ssh/id_ed25519 with no PATHRC_IDENTITY.
