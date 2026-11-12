@@ -180,11 +180,27 @@ eu||||||own|'echo top'|bin
 ||||||own||"
   check "$sh: leaving scope restores, sideways swaps, unsets and unset.all" "$expected" "$out"
 done
+if command -v fish > /dev/null; then
+  # Each substitution prints something: in fish, text joined to an empty
+  # substitution is an empty list, and echo would print nothing.
+  fstate='echo "$REGION|$CLIENT|$API|$WEB|$FRESH|$MINE|"(functions -q where; and echo where; or echo)"|"(string match -q -- "$PWD_TOP/bin" $PATH[1]; and echo bin; or echo)'
+  out=$(cd "$uw" && PWD_TOP=$uw MINE=own fish --no-config -c "pathrc init fish | source; function s; $fstate; end
+    s; cd client/api; s; cd ../web; s; cd ../fresh; s; cd ../..; s; cd ..; s" 2>&1)
+  # No `where`: the top file defines it in [sh], which fish doesn't read.
+  expected="eu|||||own||bin
+api|acme|1|||||bin
+us|acme||1||own||bin
+||||1|own||
+eu|||||own||bin
+|||||own||"
+  check "fish: leaving scope restores, sideways swaps, unsets and unset.all" "$expected" "$out"
+fi
 
-# cd within the same scope decrypts nothing.
+# Only a newly entered file is read: going deeper doesn't decrypt the outer
+# levels again, and a cd within scope decrypts nothing.
 if [[ -n $token ]]; then
-  out=$(cd "$uw" && PATHRC_DEBUG=1 bash -c 'eval "$(pathrc init bash)"; cd client/api; cd deep; cd ..; cd deep; cd ..' 2>&1)
-  check "bash: no decryption while staying in scope" "1" "$(grep -c 'decrypting' <<< "$out")"
+  out=$(cd "$uw" && PATHRC_DEBUG=1 bash -c 'eval "$(pathrc init bash)"; cd client; cd api; cd deep; cd ..; cd deep; cd ../../web' 2>&1)
+  check "bash: client's .age is decrypted once, entering client" "1" "$(grep -c 'decrypting' <<< "$out")"
 fi
 
 # var: a shell variable that child programs don't see, even when it shadows

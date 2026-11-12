@@ -209,23 +209,28 @@ on most filesystems the old blocks remain until reused.
 
 ### Leaving a directory
 
-In bash and zsh, what a directory's files set is taken back out when you
-leave it: variables they set are unset, or get back the value they had before
-(so an inner override of an outer setting is restored on the way out, and a
-variable you set yourself comes back after an `unset.env`), aliases are
-removed or restored, and `PATH` is put back. Moving sideways from one project
-to its sibling unloads one and loads the other.
+What a directory's files set is taken back out when you leave it, in bash,
+zsh and fish: variables they set are unset, or get back the value they had
+before (so an inner override of an outer setting is restored on the way out,
+and a variable you set yourself comes back after an `unset.env`), aliases are
+removed or restored, and the `PATH` entries they added are removed. Moving
+sideways from one project to its sibling leaves one and enters the other.
+
+pathrc does this by having the shell save each name's value, in a variable
+of its own, before a file changes it, and put it back when you leave. The
+values never pass through pathrc, so a secret is only ever in your shell.
 
 Some consequences:
 
 - A value you change by hand after a file set it is reset when you leave.
-- Files already loaded and unchanged are not read again on `cd`, so an
-  encrypted file is not decrypted on every `cd` inside its scope. Crossing
-  into or out of a directory with its own file reads the files in scope
-  again.
-- A new shell (a subshell, a terminal multiplexer pane) loads for itself; it
+  Changes you make to `PATH` yourself are kept: only pathrc's entries are
+  removed.
+- Only a file you newly enter is read. Moving around inside a project reads
+  and decrypts nothing, and going deeper reads only the deeper files.
+- A new shell (a subshell, a terminal multiplexer pane) enters for itself; it
   inherits exported variables but not the record of what to undo.
-- fish loads settings but does not unload them yet.
+- After upgrading pathrc, start a new shell: a shell started before keeps
+  the old hook, and pathrc says so rather than printing code it can't run.
 
 ### Allowing files
 
@@ -263,8 +268,8 @@ bash with the `Bourne` shell. NOTE this is completely untested!
 #### Collate
 
 This is the engine the `cd` hook runs. When the files in scope have changed
-it works out the settings they add up to and prints the shell code that
-undoes the old ones and applies the new.
+it prints the shell code that leaves the files no longer in scope, innermost
+first, and enters the new ones.
 
 #### Edit, encrypt, decrypt and rekey
 
@@ -339,11 +344,12 @@ working directory.
 The age identity file for decrypting `.pathrc.toml.age` files. See
 [Encrypted files](#encrypted-files).
 
-#### PATHRC_LOADED
+#### PATHRC_STATE
 
 Set by the hook for each run of `collate`, from the shell's own
-`__pathrc_loaded` variable: the files loaded so far, one `sha256 path` line
-each. It is not exported, so a new shell starts with nothing loaded.
+`__pathrc_state` variable: the files entered so far, and for each the names
+it changed and the `PATH` entries it added. It holds no values. It is not
+exported, so a new shell starts with nothing entered.
 
 #### PATHRC_DEBUG
 

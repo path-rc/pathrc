@@ -64,18 +64,13 @@ impl Wanted {
     /// Shell code applying these settings on top of the shell as it is.
     pub fn render(&self, shell: Shell) -> Zeroizing<String> {
         let mut out = Zeroizing::new(String::new());
-        let fish = shell == Shell::Fish;
         for name in self
             .vars
             .iter()
             .filter(|(_, v)| v.is_none())
             .map(|(n, _)| n)
         {
-            out.push_str(&if fish {
-                format!("set -e {name}\n")
-            } else {
-                format!("unset {name}\n")
-            });
+            out.push_str(&unset_var(name, shell));
         }
         for name in self
             .alias
@@ -83,23 +78,12 @@ impl Wanted {
             .filter(|(_, v)| v.is_none())
             .map(|(n, _)| n)
         {
-            out.push_str(&if fish {
-                format!("functions -e {name}\n")
-            } else {
-                format!("unalias {name} 2>/dev/null\n")
-            });
+            out.push_str(&unset_alias(name, shell));
         }
         for (name, var) in &self.vars {
-            let Some(var) = var else { continue };
-            let value = quote(&var.value, shell);
-            out.push_str(&match (fish, var.exported) {
-                (true, true) => format!("set -gx {name} {value}\n"),
-                (false, true) => format!("export {name}={value}\n"),
-                // Unset first: assigning to a name that is already exported
-                // would keep it exported, and a var must not reach children.
-                (true, false) => format!("set -e {name}\nset -gu {name} {value}\n"),
-                (false, false) => format!("unset {name}\n{name}={value}\n"),
-            });
+            if let Some(var) = var {
+                out.push_str(&set_var(name, var, shell));
+            }
         }
         if !self.path.is_empty() {
             let dirs: Vec<String> = self
@@ -107,7 +91,7 @@ impl Wanted {
                 .iter()
                 .map(|dir| dir.to_string_lossy().into_owned())
                 .collect();
-            out.push_str(&if fish {
+            out.push_str(&if shell == Shell::Fish {
                 let words: Vec<String> = dirs.iter().map(|d| quote(d, shell)).collect();
                 format!("set -gx PATH {} $PATH\n", words.join(" "))
             } else {
@@ -116,15 +100,48 @@ impl Wanted {
         }
         for (name, value) in &self.alias {
             if let Some(value) = value {
-                let value = quote(value, shell);
-                out.push_str(&if fish {
-                    format!("alias {name} {value}\n")
-                } else {
-                    format!("alias {name}={value}\n")
-                });
+                out.push_str(&set_alias(name, value, shell));
             }
         }
         out
+    }
+}
+
+/// Code setting a variable: exported for `env`, not for `var`. A `var` is
+/// unset first: assigning to a name that is already exported would keep it
+/// exported, and a `var` must not reach child programs.
+pub fn set_var(name: &str, var: &Var, shell: Shell) -> String {
+    let value = quote(&var.value, shell);
+    match (shell, var.exported) {
+        (Shell::Fish, true) => format!("set -gx {name} {value}\n"),
+        (Shell::Fish, false) => format!("set -e {name}\nset -gu {name} {value}\n"),
+        (_, true) => format!("export {name}={value}\n"),
+        // typeset -g: plain assignment in a function warns under zsh's
+        // WARN_CREATE_GLOBAL.
+        (Shell::Zsh, false) => format!("unset {name}\ntypeset -g {name}={value}\n"),
+        (_, false) => format!("unset {name}\n{name}={value}\n"),
+    }
+}
+
+pub fn unset_var(name: &str, shell: Shell) -> String {
+    match shell {
+        Shell::Fish => format!("set -e {name}\n"),
+        _ => format!("unset {name}\n"),
+    }
+}
+
+pub fn set_alias(name: &str, value: &str, shell: Shell) -> String {
+    let value = quote(value, shell);
+    match shell {
+        Shell::Fish => format!("alias {name} {value}\n"),
+        _ => format!("alias {name}={value}\n"),
+    }
+}
+
+pub fn unset_alias(name: &str, shell: Shell) -> String {
+    match shell {
+        Shell::Fish => format!("functions -e {name}\n"),
+        _ => format!("unalias {name} 2>/dev/null\n"),
     }
 }
 

@@ -1,14 +1,13 @@
+use crate::apply::Emitter;
 use crate::common::current_dir;
 use crate::config::{describe, parse, Layer};
 use crate::crypto::Identities;
 use crate::files::{find, start_dir, ConfigFile};
-use crate::quote::quote;
 use crate::settings::Wanted;
 use crate::shell::Shell;
-use crate::state::{self, Entry};
+use crate::state::{self, Entry, Level};
 use crate::trust::{hash, Store, Trust};
 use std::fs;
-use zeroize::Zeroizing;
 
 /// A file in scope that may be read: readable and allowed.
 pub struct Candidate {
@@ -17,12 +16,12 @@ pub struct Candidate {
     pub entry: Entry,
 }
 
-/// Prints the shell code that brings the shell from what it has loaded
-/// (`PATHRC_LOADED`) to the settings the current directory wants. When the
-/// files in scope are the same, with the same hashes, it prints nothing and
-/// reads nothing, so an encrypted file is not decrypted again. Otherwise the
-/// whole cascade is folded into one set of settings, loaded as one level
-/// that the shell's snapshot can undo.
+/// Prints the shell code that brings the shell from the levels it has
+/// entered (`PATHRC_STATE`) to the files the current directory has in
+/// scope: leaving levels innermost first down to where they differ, then
+/// entering new ones outermost first. When the files in scope are the same,
+/// with the same hashes, it prints nothing and reads nothing, so nothing is
+/// decrypted again while you stay in scope.
 ///
 /// Never fails the `cd` hook: problems are reported on stderr, the file is
 /// skipped, and the exit status stays 0. stdout carries only shell code.
@@ -35,23 +34,36 @@ pub fn handle_collate() {
             return;
         }
     };
-    let loaded = state::parse(&std::env::var("PATHRC_LOADED").unwrap_or_default());
+    if std::env::var_os("PATHRC_STATE").is_none() && std::env::var_os("PATHRC_LOADED").is_some() {
+        // The hook of a shell started before pathrc was upgraded: it can't
+        // run the code this pathrc prints.
+        eprintln!("pathrc: this shell's hook is from an older pathrc; start a new shell");
+        return;
+    }
+    let loaded = state::parse(&std::env::var("PATHRC_STATE").unwrap_or_default());
     let candidates = candidates(&find(&cwd, start_dir().as_deref()), &store);
-    let wanted_entries: Vec<Entry> = candidates.iter().map(|c| c.entry.clone()).collect();
-    if loaded == wanted_entries {
+    let wanted: Vec<Entry> = candidates.iter().map(|c| c.entry.clone()).collect();
+    let keep = state::common_prefix(&loaded, &wanted);
+    if keep == loaded.len() && keep == wanted.len() {
         return;
     }
 
-    let mut out = Zeroizing::new(String::new());
-    for index in (0..loaded.len()).rev() {
-        out.push_str(&unload(index, &state::render(&loaded[..index]), shell));
+    let mut emitter = Emitter::from_env(shell);
+    for index in (keep..loaded.len()).rev() {
+        emitter.leave(index, &loaded[index]);
     }
-    let (wanted, applied, _) = fold(&candidates, shell);
-    if !applied.is_empty() {
-        let code = wanted.render(shell);
-        out.push_str(&load(0, &state::render(&applied), &code, shell));
+    let mut stack: Vec<Level> = loaded[..keep].to_vec();
+    let mut identities: Option<Result<Identities, String>> = None;
+    for candidate in &candidates[keep..] {
+        match layer_for(candidate, shell, &mut identities) {
+            Ok(layer) => {
+                let level = emitter.enter(stack.len(), &candidate.entry, &layer, &stack);
+                stack.push(level);
+            }
+            Err(error) => eprintln!("pathrc: {}: {error}", candidate.file.path.display()),
+        }
     }
-    print!("{}", *out);
+    print!("{}", *emitter.finish(&stack));
 }
 
 /// The settings `candidates` add up to for `shell`, outermost first, with
@@ -161,28 +173,4 @@ pub fn layer_for(
         }
         decrypt_with(identities, ciphertext)
     })
-}
-
-/// Unloads the file at `index`, leaving `state` loaded.
-fn unload(index: usize, state: &str, shell: Shell) -> String {
-    match shell {
-        // fish has no snapshots: it loads but cannot unload.
-        Shell::Fish => format!("set -g __pathrc_loaded {}\n", quote(state, shell)),
-        _ => format!("__pathrc_unload {index} {}\n", quote(state, shell)),
-    }
-}
-
-/// Loads `code` as the file at `index`, leaving `state` loaded.
-fn load(index: usize, state: &str, code: &str, shell: Shell) -> String {
-    let state = quote(state, shell);
-    match shell {
-        Shell::Fish if code.is_empty() => format!("set -g __pathrc_loaded {state}\n"),
-        Shell::Fish => format!(
-            "eval {}\nset -g __pathrc_loaded {state}\n",
-            quote(code, shell)
-        ),
-        // Nothing for this shell: record it, with nothing to undo.
-        _ if code.is_empty() => format!("__pathrc_loaded={state}\n"),
-        _ => format!("__pathrc_load {index} {state} {}\n", quote(code, shell)),
-    }
 }
