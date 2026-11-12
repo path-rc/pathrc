@@ -191,5 +191,30 @@ fi
 check "bash: eval \$(pathrc show) gives the same values" "sub yes" \
   "$(cd "$tree/project/sub" && PATHRC_SHELL=bash PATHRC_START=$tree bash -c 'eval "$(pathrc show)"; echo "$LEVEL $TOP_SH"' 2>&1)"
 
+# The installer, against a release archive made from this build.
+case $(uname -s)/$(uname -m) in
+  Linux/x86_64) target=x86_64-unknown-linux-musl ;;
+  Linux/aarch64) target=aarch64-unknown-linux-musl ;;
+  Darwin/x86_64) target=x86_64-apple-darwin ;;
+  Darwin/arm64) target=aarch64-apple-darwin ;;
+  *) target= ;;
+esac
+if [[ -n $target ]] && command -v curl > /dev/null; then
+  release=$scratch/release
+  archive=pathrc-$target.tar.gz
+  mkdir -p "$release"
+  tar -czf "$release/$archive" -C "$(dirname "$bin")" pathrc
+  (cd "$release" && shasum -a 256 "$archive" > "$archive.sha256")
+  check "install.sh installs the release for this platform" "$("$bin" --version)" \
+    "$(PATHRC_DOWNLOAD_URL="file://$release" PATHRC_INSTALL_DIR="$scratch/installed" \
+      sh "$repo/docs/install.sh" 2> /dev/null && "$scratch/installed/pathrc" --version)"
+  echo "0000  $archive" > "$release/$archive.sha256"
+  check "install.sh refuses a checksum mismatch" "refused" \
+    "$(PATHRC_DOWNLOAD_URL="file://$release" PATHRC_INSTALL_DIR="$scratch/refused" \
+      sh "$repo/docs/install.sh" > /dev/null 2>&1 || echo refused)"
+else
+  echo "skip: install.sh (no release target or curl)"
+fi
+
 echo "$pass passed, $fail failed"
 [[ $fail == 0 ]]
