@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 pub const PLAIN: &str = ".pathrc.toml";
 /// Files of older pathrc versions, no longer read: the marker-section
 /// files of 0.1 (RFC 0001) and the whole-file `.pathrc.toml.age` of 0.3 to
-/// 0.5 (RFC 0002). `list` marks them.
+/// 0.5 (RFC 0002). `list` marks them, and `pathrc migrate` converts them.
 pub const OLD: [&str; 3] = [".pathrc", ".pathrc.age", ".pathrc.toml.age"];
 
 /// A configuration file in scope.

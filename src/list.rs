@@ -56,12 +56,7 @@ pub fn handle_list() -> ExitCode {
     if !old.is_empty() {
         println!("\nnot read, in the old format:\n");
         for path in old {
-            let hint = if path.extension().is_some_and(|e| e == "age") {
-                "move its values into .enc tables"
-            } else {
-                "convert it to .pathrc.toml"
-            };
-            println!("{}  [old format: {hint}]", path.display());
+            println!("{}  [old format: pathrc migrate]", path.display());
         }
     }
     ExitCode::SUCCESS
