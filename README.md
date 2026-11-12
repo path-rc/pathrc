@@ -1,8 +1,10 @@
-# PATHRC
+# path-rc
 
 ## Logical project partitioning and more
 
-### pathrc is a  command line utility providing per path configurations for
+[path-rc.com](https://path-rc.com)
+
+### path-rc is a command line utility, `pathrc`, providing per path configurations for
 
 * environment variables
 * aliases

@@ -2,7 +2,8 @@
 name = "pathrc"
 authors = ["github.com/mrdoodles"]
 version = "0.0.1"
-repository = "https://github.com/pathrc/pathrc"
+repository = "https://github.com/path-rc/pathrc"
+homepage = "https://path-rc.com"
 readme = "README.md"
 keywords = ["pathrc", "cli", "utility", "linux", "mac"]
 categories = ["command-line-utilities"]
