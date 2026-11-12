@@ -1,13 +1,16 @@
-//! Finding the `.pathrc` files that apply to a directory.
+//! Finding the `.pathrc.toml` files that apply to a directory.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The configuration file name, the same for every shell.
-pub const PLAIN: &str = ".pathrc";
-/// The same, encrypted with age. Read after `.pathrc` in the same
+pub const PLAIN: &str = ".pathrc.toml";
+/// The same, encrypted with age. Read after `.pathrc.toml` in the same
 /// directory, so a secret can override a default.
-pub const ENCRYPTED: &str = ".pathrc.age";
+pub const ENCRYPTED: &str = ".pathrc.toml.age";
+/// The marker-section files of pathrc 0.1 (RFC 0001), no longer read;
+/// `list` points at `pathrc migrate` for them.
+pub const OLD: [&str; 2] = [".pathrc", ".pathrc.age"];
 
 /// A configuration file in scope.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,15 +31,28 @@ pub fn in_dir(dir: &Path) -> Vec<ConfigFile> {
         .collect()
 }
 
+/// Old-format files in one directory.
+pub fn old_in_dir(dir: &Path) -> Vec<PathBuf> {
+    OLD.iter()
+        .map(|name| dir.join(name))
+        .filter(|path| path.is_file())
+        .collect()
+}
+
 /// The configuration files from `start` (or the filesystem root, when `cwd`
 /// is not inside `start`) down to `cwd`: outermost directory first, and
-/// within a directory `.pathrc` before `.pathrc.age`.
+/// within a directory `.pathrc.toml` before `.pathrc.toml.age`.
 pub fn find(cwd: &Path, start: Option<&Path>) -> Vec<ConfigFile> {
+    dirs(cwd, start).iter().flat_map(|d| in_dir(d)).collect()
+}
+
+/// The directories in scope, outermost first.
+pub fn dirs(cwd: &Path, start: Option<&Path>) -> Vec<PathBuf> {
     let start = start.and_then(|start| fs::canonicalize(start).ok());
     let mut dirs = Vec::new();
     let mut dir = Some(cwd);
     while let Some(current) = dir {
-        dirs.push(current);
+        dirs.push(current.to_path_buf());
         let reached_start = start
             .as_deref()
             .is_some_and(|start| fs::canonicalize(current).is_ok_and(|c| c == start));
@@ -45,7 +61,8 @@ pub fn find(cwd: &Path, start: Option<&Path>) -> Vec<ConfigFile> {
         }
         dir = current.parent();
     }
-    dirs.into_iter().rev().flat_map(in_dir).collect()
+    dirs.reverse();
+    dirs
 }
 
 /// `PATHRC_START`, the shell's starting directory, if set.
@@ -107,9 +124,15 @@ mod tests {
     }
 
     #[test]
-    fn ignores_the_old_per_shell_files() {
+    fn ignores_old_files_but_can_list_them() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join(".pathrc-bash"), "").unwrap();
+        for name in [".pathrc-bash", ".pathrc", ".pathrc.age"] {
+            fs::write(root.path().join(name), "").unwrap();
+        }
         assert!(find(root.path(), Some(root.path())).is_empty());
+        assert_eq!(
+            old_in_dir(root.path()),
+            vec![root.path().join(".pathrc"), root.path().join(".pathrc.age")]
+        );
     }
 }

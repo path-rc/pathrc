@@ -1,6 +1,7 @@
 use crate::common::current_dir;
+use crate::config::describe;
 use crate::config::validate;
-use crate::files::{find, start_dir, PLAIN};
+use crate::files::{dirs, in_dir, old_in_dir, start_dir, PLAIN};
 use crate::shell::Shell;
 use crate::trust::{Store, Trust};
 use std::fs;
@@ -16,8 +17,10 @@ pub fn handle_list() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let files = find(&cwd, start_dir().as_deref());
-    if files.is_empty() {
+    let scope = dirs(&cwd, start_dir().as_deref());
+    let files: Vec<_> = scope.iter().flat_map(|d| in_dir(d)).collect();
+    let old: Vec<_> = scope.iter().flat_map(|d| old_in_dir(d)).collect();
+    if files.is_empty() && old.is_empty() {
         println!("no {PLAIN} files found in path");
         return ExitCode::SUCCESS;
     }
@@ -36,18 +39,24 @@ pub fn handle_list() -> ExitCode {
                     Trust::Changed => marks.push("changed".to_string()),
                 }
                 // An encrypted file's structure can't be seen without decrypting it.
-                let problems: Vec<_> = if file.encrypted {
+                let problems = if file.encrypted {
                     Vec::new()
                 } else {
-                    validate(&bytes).iter().map(|p| p.to_string()).collect()
+                    validate(&bytes)
                 };
                 if !problems.is_empty() {
-                    marks.push(format!("invalid: {}", problems.join("; ")));
+                    marks.push(format!("invalid: {}", describe(&problems)));
                 }
             }
         }
         let marks: String = marks.iter().map(|m| format!("  [{m}]")).collect();
         println!("{}{marks}", file.path.display());
+    }
+    if !old.is_empty() {
+        println!("\nnot read, in the old format:\n");
+        for path in old {
+            println!("{}  [old format: convert it to {PLAIN}]", path.display());
+        }
     }
     ExitCode::SUCCESS
 }

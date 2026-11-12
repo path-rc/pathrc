@@ -1,4 +1,5 @@
-//! `pathrc edit`: create or change a `.pathrc` or `.pathrc.age` in your editor.
+//! `pathrc edit`: create or change a `.pathrc.toml` or `.pathrc.toml.age` in
+//! your editor.
 //!
 //! The file is decrypted into a temporary file, mode 0600 in a 0700
 //! directory under `$XDG_RUNTIME_DIR` (a tmpfs on most systems), edited,
@@ -7,7 +8,7 @@
 //! (it is dropped), and Ctrl-C (pathrc ignores SIGINT while the editor runs,
 //! so it lives to clean up).
 
-use crate::config::validate;
+use crate::config::{validate, Problem};
 use crate::crypto::{encrypt, recipients_for, Identities};
 use crate::files::{ENCRYPTED, PLAIN};
 use crate::manage::{default_file, dir_of, read, write_atomic};
@@ -22,9 +23,16 @@ use zeroize::Zeroizing;
 const NOTE: &str = "# pathrc: ";
 
 const NEW_FILE: &str = "\
-# pathrc: a new configuration file. Lines before any marker apply to every
-# pathrc: shell; #sh (bash and zsh), #bash, #zsh and #fish start a section.
-# pathrc: These lines are removed when you save.
+# pathrc: a new .pathrc.toml. Tables: [common] for every shell, [sh] for
+# pathrc: bash and zsh, then [bash], [zsh] and [fish]. Keys in each table:
+# pathrc:   env.NAME = \"value\"        set and export a variable
+# pathrc:   alias.NAME = \"command\"    define an alias
+# pathrc:   path.prepend = [\"bin\"]    put directories in front of PATH
+# pathrc:   unset.env = [\"NAME\"]      remove variables while here
+# pathrc:   unset.alias = [\"NAME\"]    remove aliases while here
+# pathrc:   unset.all = true          ignore what outer files set
+# pathrc: Values are strings, used as written. These lines are removed when
+# pathrc: you save.
 ";
 
 pub struct EditArgs<'a> {
@@ -33,8 +41,8 @@ pub struct EditArgs<'a> {
     pub tmp_ok: bool,
 }
 
-/// Which file to edit: as named; else `.pathrc.age` here if it exists (or
-/// `--encrypt`); else `.pathrc`.
+/// Which file to edit: as named; else `.pathrc.toml.age` here if it exists
+/// (or `--encrypt`); else `.pathrc.toml`.
 fn target(args: &EditArgs) -> Result<PathBuf, String> {
     if let Some(file) = args.file {
         return Ok(file.to_path_buf());
@@ -153,7 +161,7 @@ fn edit(args: &EditArgs) -> Result<String, String> {
 
     let mut temp = tempfile::Builder::new()
         .prefix("pathrc-edit-")
-        .suffix(".sh")
+        .suffix(".toml")
         .tempfile_in(temp_dir(encrypted, args.tmp_ok)?)
         .map_err(|e| format!("cannot make a temporary file: {e}"))?;
     let mut shown = if exists {
@@ -188,8 +196,16 @@ fn edit(args: &EditArgs) -> Result<String, String> {
         let notes: String = problems
             .iter()
             .map(|p| {
-                let line = p.line + problems.len() + 1;
-                format!("{NOTE}  line {line}: {}\n", p.message)
+                let shifted = Problem {
+                    line: if p.line == 0 {
+                        0
+                    } else {
+                        p.line + problems.len() + 1
+                    },
+                    column: p.column,
+                    message: p.message.clone(),
+                };
+                format!("{NOTE}  {shifted}\n")
             })
             .collect();
         shown = format!("{header}{notes}{}", *content);

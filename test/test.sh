@@ -11,7 +11,9 @@ repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 bin=${1:-$repo/target/debug/pathrc}
 [[ -x $bin ]] || { echo "no pathrc binary at $bin; run cargo build" >&2; exit 2; }
 
-scratch=$(mktemp -d)
+# Resolved: on macOS the temp directory is under /var, a symlink to
+# /private/var, and pathrc reports resolved paths.
+scratch=$(cd "$(mktemp -d)" && pwd -P)
 trap 'chmod -R u+rwx "$scratch" 2>/dev/null; rm -rf "$scratch"' EXIT
 mkdir -p "$scratch/bin" "$scratch/home"
 ln -s "$bin" "$scratch/bin/pathrc"
@@ -31,51 +33,52 @@ check() { # name expected actual
   fi
 }
 
-# A tree: top/.pathrc, top/project/.pathrc, top/project/sub/.pathrc
+# A tree: top/.pathrc.toml, top/project/.pathrc.toml, top/project/sub/.pathrc.toml
 tree=$scratch/top
 mkdir -p "$tree/project/sub"
-cat > "$tree/.pathrc" <<'PATHRC'
-export LEVEL=top
-#sh
-export TOP_SH=yes
-#fish
-set -gx TOP_FISH yes
+cat > "$tree/.pathrc.toml" <<'PATHRC'
+[common]
+env.LEVEL = "top"
+[sh]
+env.TOP_SH = "yes"
+[fish]
+env.TOP_FISH = "yes"
 PATHRC
-cat > "$tree/project/.pathrc" <<'PATHRC'
-#bash
-export LEVEL=project-bash
-#zsh
-export LEVEL=project-zsh
-#fish
-set -gx LEVEL project-fish
+cat > "$tree/project/.pathrc.toml" <<'PATHRC'
+[bash]
+env.LEVEL = "project-bash"
+[zsh]
+env.LEVEL = "project-zsh"
+[fish]
+env.LEVEL = "project-fish"
 PATHRC
-printf 'export LEVEL=sub\nexport SUB=yes' > "$tree/project/sub/.pathrc" # no final newline
-pathrc allow "$tree/.pathrc" "$tree/project/.pathrc" "$tree/project/sub/.pathrc" > /dev/null
+printf '[common]\nenv.LEVEL = "sub"\nenv.SUB = "yes"' > "$tree/project/sub/.pathrc.toml" # no final newline
+pathrc allow "$tree/.pathrc.toml" "$tree/project/.pathrc.toml" "$tree/project/sub/.pathrc.toml" > /dev/null
 
 run_posix() { # shell init-arg script
   (cd "$tree" && "$1" -c "eval \"\$(pathrc init $2)\"; $3" 2>&1)
 }
 
 if command -v bash > /dev/null; then
-  check "bash: nested cd picks the bash section" "project-bash yes" \
+  check "bash: nested cd reads the [bash] table" "project-bash yes" \
     "$(run_posix bash bash 'cd project; echo "$LEVEL $TOP_SH"')"
   check "bash: innermost wins, missing newline ok" "sub yes yes" \
     "$(run_posix bash bash 'cd project/sub; echo "$LEVEL $SUB $TOP_SH"')"
-  check "sh: shared init reads common and #sh only" "top yes" \
+  check "sh: shared init reads [common] and [sh] only" "top yes" \
     "$(run_posix bash sh 'cd project; echo "$LEVEL $TOP_SH"')"
 else
   echo "skip: bash not installed"
 fi
 
 if command -v zsh > /dev/null; then
-  check "zsh: nested cd picks the zsh section" "project-zsh yes" \
+  check "zsh: nested cd reads the [zsh] table" "project-zsh yes" \
     "$(run_posix zsh zsh 'cd project; echo "$LEVEL $TOP_SH"')"
 else
   echo "skip: zsh not installed"
 fi
 
 if command -v fish > /dev/null; then
-  check "fish: nested cd picks the fish section, not #sh" "project-fish yes -" \
+  check "fish: nested cd reads [fish], not [sh]" "project-fish yes -" \
     "$(cd "$tree" && fish --no-config -c 'pathrc init fish | source; cd project; echo "$LEVEL $TOP_FISH -$TOP_SH"' 2>&1)"
 else
   echo "skip: fish not installed"
@@ -83,84 +86,104 @@ fi
 
 # collate never breaks the hook: an unreadable file is reported, the rest load.
 if [[ $(id -u) != 0 ]]; then
-  chmod 000 "$tree/project/.pathrc"
+  chmod 000 "$tree/project/.pathrc.toml"
   check "bash: unreadable middle file is skipped" "sub yes" \
     "$(run_posix bash bash 'cd project/sub 2>/dev/null; echo "$LEVEL $TOP_SH"')"
-  chmod 644 "$tree/project/.pathrc"
+  chmod 644 "$tree/project/.pathrc.toml"
 fi
 
-# Nothing is evaluated until allowed, and a change needs allowing again.
+# Nothing is applied until allowed, and a change needs allowing again.
 mkdir -p "$tree/cloned"
-echo 'export CLONED=ran' > "$tree/cloned/.pathrc"
-check "bash: an untrusted file is not evaluated" "-" \
+printf '[common]\nenv.CLONED = "ran"\n' > "$tree/cloned/.pathrc.toml"
+check "bash: an untrusted file is not applied" "-" \
   "$(run_posix bash bash 'cd cloned 2>/dev/null; echo "-$CLONED"')"
 (cd "$tree/cloned" && pathrc allow > /dev/null)
-check "bash: it runs once allowed" "-ran" \
+check "bash: it applies once allowed" "-ran" \
   "$(run_posix bash bash 'cd cloned 2>/dev/null; echo "-$CLONED"')"
-echo 'export CLONED=changed' > "$tree/cloned/.pathrc"
-check "bash: a changed file is not evaluated" "-" \
+printf '[common]\nenv.CLONED = "changed"\n' > "$tree/cloned/.pathrc.toml"
+check "bash: a changed file is not applied" "-" \
   "$(run_posix bash bash 'cd cloned 2>/dev/null; echo "-$CLONED"')"
+
+# An old-format file is not read.
+mkdir -p "$tree/old"
+echo 'export OLD=ran' > "$tree/old/.pathrc"
+(cd "$tree/old" && pathrc allow .pathrc > /dev/null)
+check "bash: an old-format .pathrc is not read" "-" \
+  "$(run_posix bash bash 'cd old; echo "-$OLD"')"
 
 # An encrypted file, made with the age CLI if it is installed.
 if command -v age-keygen > /dev/null && command -v age > /dev/null; then
   mkdir -p "$XDG_CONFIG_HOME/pathrc" "$tree/secret"
   age-keygen -o "$XDG_CONFIG_HOME/pathrc/identity" 2> /dev/null
-  printf 'export TOKEN=from-age\n#zsh\nexport TOKEN=zsh-age\n' |
-    age -a -r "$(age-keygen -y "$XDG_CONFIG_HOME/pathrc/identity")" > "$tree/secret/.pathrc.age"
+  printf '[common]\nenv.TOKEN = "from-age"\n[zsh]\nenv.TOKEN = "zsh-age"\n' |
+    age -a -r "$(age-keygen -y "$XDG_CONFIG_HOME/pathrc/identity")" > "$tree/secret/.pathrc.toml.age"
   (cd "$tree/secret" && pathrc allow > /dev/null)
-  check "bash: .pathrc.age is decrypted" "from-age" \
+  check "bash: .pathrc.toml.age is decrypted" "from-age" \
     "$(run_posix bash bash 'cd secret; echo "$TOKEN"')"
   if command -v zsh > /dev/null; then
-    check "zsh: sections apply inside .pathrc.age" "zsh-age" \
+    check "zsh: shell tables apply inside .pathrc.toml.age" "zsh-age" \
       "$(run_posix zsh zsh 'cd secret; echo "$TOKEN"')"
   fi
 else
   echo "skip: age CLI not installed"
 fi
 
-# Unloading on leaving scope (bash and zsh): a three-level tree mixing plain
-# and encrypted files, siblings, an inner override of an outer variable, and
-# aliases and functions.
+# Leaving scope (bash and zsh): a three-level tree mixing plain and encrypted
+# files, siblings, an inner override of an outer variable, aliases, PATH,
+# named unsets of the user's own values, and a file that starts afresh.
 uw=$scratch/unload
-mkdir -p "$uw/client/api" "$uw/client/web" "$uw/other"
-cat > "$uw/.pathrc" <<'PATHRC'
-export REGION=eu
-#sh
-alias where='echo top'
+mkdir -p "$uw/client/api/deep" "$uw/client/web" "$uw/client/fresh" "$uw/other"
+cat > "$uw/.pathrc.toml" <<'PATHRC'
+[common]
+env.REGION = "eu"
+path.prepend = ["bin"]
+[sh]
+alias.where = "echo top"
 PATHRC
-cat > "$uw/client/.pathrc" <<'PATHRC'
-export REGION=us CLIENT=acme
-#sh
-client_fn() { echo client; }
+cat > "$uw/client/.pathrc.toml" <<'PATHRC'
+[common]
+env.REGION = "us"
+env.CLIENT = "acme"
 PATHRC
-echo 'export API=1 REGION=api' > "$uw/client/api/.pathrc"
-echo 'export WEB=1' > "$uw/client/web/.pathrc"
+cat > "$uw/client/api/.pathrc.toml" <<'PATHRC'
+[common]
+env.API = "1"
+env.REGION = "api"
+unset.env = ["MINE"]
+unset.alias = ["where"]
+PATHRC
+printf '[common]\nenv.WEB = "1"\n' > "$uw/client/web/.pathrc.toml"
+printf '[common]\nunset.all = true\nenv.FRESH = "1"\n' > "$uw/client/fresh/.pathrc.toml"
 if command -v age > /dev/null && [[ -f $XDG_CONFIG_HOME/pathrc/identity ]]; then
-  printf 'export CLIENT_TOKEN=secret\n' |
-    age -a -r "$(age-keygen -y "$XDG_CONFIG_HOME/pathrc/identity")" > "$uw/client/.pathrc.age"
+  printf '[common]\nenv.CLIENT_TOKEN = "secret"\n' |
+    age -a -r "$(age-keygen -y "$XDG_CONFIG_HOME/pathrc/identity")" > "$uw/client/.pathrc.toml.age"
   token=secret
 else
   token= # no age CLI: the tree is plain only
 fi
-for d in "$uw" "$uw/client" "$uw/client/api" "$uw/client/web"; do (cd "$d" && pathrc allow > /dev/null); done
-
-state='echo "${REGION-}|${CLIENT-}|${CLIENT_TOKEN-}|${API-}|${WEB-}|$(alias where 2>/dev/null | sed "s/.*=//")|$(type client_fn > /dev/null 2>&1 && echo fn)"'
-for sh in bash zsh; do
-  command -v "$sh" > /dev/null || continue
-  out=$(cd "$uw" && "$sh" -c "eval \"\$(pathrc init $sh)\"; s() { $state; }
-    s; cd client/api; s; cd ../web; s; cd ../..; s; cd other; s; cd ..; cd ..; s" 2>&1)
-  expected="eu|||||'echo top'|
-api|acme|$token|1||'echo top'|fn
-us|acme|$token||1|'echo top'|fn
-eu|||||'echo top'|
-eu|||||'echo top'|
-||||||"
-  check "$sh: leaving scope unloads, sideways swaps, overrides restore" "$expected" "$out"
+for d in "$uw" "$uw/client" "$uw/client/api" "$uw/client/web" "$uw/client/fresh"; do
+  (cd "$d" && pathrc allow > /dev/null)
 done
 
-# cd within the same scope decrypts nothing; entering it decrypts once.
+# REGION|CLIENT|CLIENT_TOKEN|API|WEB|FRESH|MINE|alias where|bin first on PATH
+state='echo "${REGION-}|${CLIENT-}|${CLIENT_TOKEN-}|${API-}|${WEB-}|${FRESH-}|${MINE-}|$(alias where 2>/dev/null | sed "s/.*=//")|$([[ $PATH == "$PWD_TOP/bin:"* ]] && echo bin)"'
+for sh in bash zsh; do
+  command -v "$sh" > /dev/null || continue
+  out=$(cd "$uw" && PWD_TOP=$uw MINE=own "$sh" -c "eval \"\$(pathrc init $sh)\"; s() { $state; }
+    s; cd client/api; s; cd ../web; s; cd ../fresh; s; cd ../..; s; cd other; s; cd ..; cd ..; s" 2>&1)
+  expected="eu||||||own|'echo top'|bin
+api|acme|$token|1|||||bin
+us|acme|$token||1||own|'echo top'|bin
+|||||1|own||
+eu||||||own|'echo top'|bin
+eu||||||own|'echo top'|bin
+||||||own||"
+  check "$sh: leaving scope restores, sideways swaps, unsets and unset.all" "$expected" "$out"
+done
+
+# cd within the same scope decrypts nothing.
 if [[ -n $token ]]; then
-  out=$(cd "$uw/client" && PATHRC_DEBUG=1 bash -c 'eval "$(pathrc init bash)"; cd api; cd ..; cd api; cd web 2>/dev/null; cd ../web' 2>&1)
+  out=$(cd "$uw" && PATHRC_DEBUG=1 bash -c 'eval "$(pathrc init bash)"; cd client/api; cd deep; cd ..; cd deep; cd ..' 2>&1)
   check "bash: no decryption while staying in scope" "1" "$(grep -c 'decrypting' <<< "$out")"
 fi
 
