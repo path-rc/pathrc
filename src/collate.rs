@@ -1,15 +1,16 @@
 use crate::common::current_dir;
-use crate::config::select;
+use crate::config::{describe, parse, Layer};
 use crate::crypto::Identities;
 use crate::files::{find, start_dir, ConfigFile};
 use crate::quote::quote;
+use crate::settings::Wanted;
 use crate::shell::Shell;
 use crate::state::{self, Entry};
 use crate::trust::{hash, Store, Trust};
 use std::fs;
 use zeroize::Zeroizing;
 
-/// A file in scope that may be evaluated: readable and allowed.
+/// A file in scope that may be read: readable and allowed.
 pub struct Candidate {
     pub file: ConfigFile,
     pub bytes: Vec<u8>,
@@ -17,10 +18,11 @@ pub struct Candidate {
 }
 
 /// Prints the shell code that brings the shell from what it has loaded
-/// (`PATHRC_LOADED`) to what the current directory wants: unloading files
-/// that left scope or changed, innermost first, then loading new ones,
-/// outermost first. Files already loaded and unchanged are not read again,
-/// so an encrypted one is not decrypted again.
+/// (`PATHRC_LOADED`) to the settings the current directory wants. When the
+/// files in scope are the same, with the same hashes, it prints nothing and
+/// reads nothing, so an encrypted file is not decrypted again. Otherwise the
+/// whole cascade is folded into one set of settings, loaded as one level
+/// that the shell's snapshot can undo.
 ///
 /// Never fails the `cd` hook: problems are reported on stderr, the file is
 /// skipped, and the exit status stays 0. stdout carries only shell code.
@@ -34,30 +36,47 @@ pub fn handle_collate() {
         }
     };
     let loaded = state::parse(&std::env::var("PATHRC_LOADED").unwrap_or_default());
-    let wanted = candidates(&find(&cwd, start_dir().as_deref()), &store);
-    let wanted_entries: Vec<Entry> = wanted.iter().map(|c| c.entry.clone()).collect();
-    let keep = state::common_prefix(&loaded, &wanted_entries);
+    let candidates = candidates(&find(&cwd, start_dir().as_deref()), &store);
+    let wanted_entries: Vec<Entry> = candidates.iter().map(|c| c.entry.clone()).collect();
+    if loaded == wanted_entries {
+        return;
+    }
 
     let mut out = Zeroizing::new(String::new());
-    for index in (keep..loaded.len()).rev() {
+    for index in (0..loaded.len()).rev() {
         out.push_str(&unload(index, &state::render(&loaded[..index]), shell));
     }
-    let mut stack: Vec<Entry> = loaded[..keep].to_vec();
-    // Read lazily, so a directory with no encrypted file never touches (or
-    // prompts for) the identity, and read at most once per run.
-    let mut identities: Option<Result<Identities, String>> = None;
-    for candidate in &wanted[keep..] {
-        let code = match code_for(candidate, shell, &mut identities) {
-            Ok(code) => code,
-            Err(error) => {
-                eprintln!("pathrc: {}: {error}", candidate.file.path.display());
-                continue;
-            }
-        };
-        stack.push(candidate.entry.clone());
-        out.push_str(&load(stack.len() - 1, &state::render(&stack), &code, shell));
+    let (wanted, applied, _) = fold(&candidates, shell);
+    if !applied.is_empty() {
+        let code = wanted.render(shell);
+        out.push_str(&load(0, &state::render(&applied), &code, shell));
     }
     print!("{}", *out);
+}
+
+/// The settings `candidates` add up to for `shell`, outermost first, with
+/// the entries of the files that were applied and whether all were. Files
+/// that cannot be decrypted or parsed are reported on stderr and skipped.
+pub fn fold(candidates: &[Candidate], shell: Shell) -> (Wanted, Vec<Entry>, bool) {
+    // Read lazily, so a scope with no encrypted file never touches (or
+    // prompts for) the identity, and read at most once per run.
+    let mut identities: Option<Result<Identities, String>> = None;
+    let mut wanted = Wanted::default();
+    let mut applied = Vec::new();
+    let mut all = true;
+    for candidate in candidates {
+        match layer_for(candidate, shell, &mut identities) {
+            Ok(layer) => {
+                wanted.apply(&layer);
+                applied.push(candidate.entry.clone());
+            }
+            Err(error) => {
+                eprintln!("pathrc: {}: {error}", candidate.file.path.display());
+                all = false;
+            }
+        }
+    }
+    (wanted, applied, all)
 }
 
 /// The files that are readable and allowed, reporting the rest.
@@ -94,30 +113,36 @@ pub fn candidates(files: &[ConfigFile], store: &Store) -> Vec<Candidate> {
     out
 }
 
-/// The shell code a file contributes for `shell`, decrypting if needed.
-pub fn code_for(
+/// The settings a file contributes for `shell`, decrypting if needed.
+pub fn layer_for(
     candidate: &Candidate,
     shell: Shell,
     identities: &mut Option<Result<Identities, String>>,
-) -> Result<Zeroizing<String>, String> {
-    if !candidate.file.encrypted {
-        return Ok(Zeroizing::new(select(
-            &String::from_utf8_lossy(&candidate.bytes),
-            shell,
-        )));
-    }
-    if std::env::var_os("PATHRC_DEBUG").is_some() {
-        eprintln!("pathrc: decrypting {}", candidate.file.path.display());
-    }
-    let identities = identities
-        .get_or_insert_with(Identities::load)
-        .as_ref()
-        .map_err(|e| format!("cannot decrypt: {e}"))?;
-    let plain = identities
-        .decrypt(&candidate.bytes)
-        .map_err(|e| format!("cannot decrypt: {e}"))?;
-    let text = std::str::from_utf8(&plain).map_err(|_| "decrypted, but not UTF-8 text")?;
-    Ok(Zeroizing::new(select(text, shell)))
+) -> Result<Layer, String> {
+    let plain;
+    let bytes: &[u8] = if candidate.file.encrypted {
+        if std::env::var_os("PATHRC_DEBUG").is_some() {
+            eprintln!("pathrc: decrypting {}", candidate.file.path.display());
+        }
+        let identities = identities
+            .get_or_insert_with(Identities::load)
+            .as_ref()
+            .map_err(|e| format!("cannot decrypt: {e}"))?;
+        plain = identities
+            .decrypt(&candidate.bytes)
+            .map_err(|e| format!("cannot decrypt: {e}"))?;
+        &plain
+    } else {
+        &candidate.bytes
+    };
+    let text = std::str::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_string())?;
+    let dir = candidate
+        .file
+        .path
+        .parent()
+        .unwrap_or(std::path::Path::new("/"));
+    let config = parse(text, dir).map_err(|problems| describe(&problems))?;
+    Ok(config.layer(shell))
 }
 
 /// Unloads the file at `index`, leaving `state` loaded.

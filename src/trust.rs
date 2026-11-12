@@ -1,7 +1,8 @@
-//! Which files the user has allowed pathrc to evaluate.
+//! Which files the user has allowed pathrc to read.
 //!
-//! pathrc evaluates whatever it finds on `cd`, so a cloned repository with a
-//! `.pathrc` would run its code the moment you enter it. Nothing is evaluated
+//! pathrc applies whatever it finds on `cd`, so a cloned repository with a
+//! `.pathrc.toml` could put its own `bin` in front of `PATH`, or alias a
+//! command you use, the moment you enter it. Nothing is applied
 //! until `pathrc allow` has recorded the file's path and the SHA-256 of its
 //! bytes in `$XDG_DATA_HOME/pathrc/allowed`. For an encrypted file that is
 //! the hash of the ciphertext, so checking trust never needs decryption.

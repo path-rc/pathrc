@@ -121,16 +121,23 @@ fn assert_no_temp_left(env: &Env) {
 fn encrypt_then_decrypt_round_trip_keeps_trust() {
     let env = Env::new();
     let dir = tempdir();
-    fs::write(dir.path().join(".pathrc"), "export SECRET=1\n").unwrap();
+    fs::write(
+        dir.path().join(".pathrc.toml"),
+        "[common]\nenv.SECRET = \"1\"\n",
+    )
+    .unwrap();
     env.pathrc(dir.path()).arg("allow").assert().success();
 
     env.pathrc(dir.path()).arg("encrypt").assert().success();
-    let sealed = dir.path().join(".pathrc.age");
-    assert!(!dir.path().join(".pathrc").exists(), "plaintext removed");
+    let sealed = dir.path().join(".pathrc.toml.age");
+    assert!(
+        !dir.path().join(".pathrc.toml").exists(),
+        "plaintext removed"
+    );
     assert!(fs::read_to_string(&sealed)
         .unwrap()
         .starts_with("-----BEGIN AGE ENCRYPTED FILE-----"));
-    assert_eq!(env.decrypt(&sealed), "export SECRET=1\n");
+    assert_eq!(env.decrypt(&sealed), "[common]\nenv.SECRET = \"1\"\n");
     assert_eq!(
         env.loaded(dir.path(), "echo $SECRET"),
         "1\n",
@@ -138,13 +145,20 @@ fn encrypt_then_decrypt_round_trip_keeps_trust() {
     );
 
     // Refuses to replace without --force.
-    fs::write(dir.path().join(".pathrc"), "export OTHER=1\n").unwrap();
+    fs::write(
+        dir.path().join(".pathrc.toml"),
+        "[common]\nenv.OTHER = \"1\"\n",
+    )
+    .unwrap();
     env.pathrc(dir.path()).arg("encrypt").assert().failure();
-    fs::remove_file(dir.path().join(".pathrc")).unwrap();
+    fs::remove_file(dir.path().join(".pathrc.toml")).unwrap();
 
     env.pathrc(dir.path()).arg("decrypt").assert().success();
-    let plain = dir.path().join(".pathrc");
-    assert_eq!(fs::read_to_string(&plain).unwrap(), "export SECRET=1\n");
+    let plain = dir.path().join(".pathrc.toml");
+    assert_eq!(
+        fs::read_to_string(&plain).unwrap(),
+        "[common]\nenv.SECRET = \"1\"\n"
+    );
     assert_eq!(
         fs::metadata(&plain).unwrap().permissions().mode() & 0o777,
         0o600
@@ -157,7 +171,7 @@ fn encrypt_then_decrypt_round_trip_keeps_trust() {
 fn encrypting_an_unallowed_file_does_not_allow_it() {
     let env = Env::new();
     let dir = tempdir();
-    fs::write(dir.path().join(".pathrc"), "export X=1\n").unwrap();
+    fs::write(dir.path().join(".pathrc.toml"), "[common]\nenv.X = \"1\"\n").unwrap();
     let out = env.pathrc(dir.path()).arg("encrypt").output().unwrap();
     assert!(out.status.success());
     assert!(String::from_utf8(out.stdout)
@@ -184,9 +198,9 @@ fn recipients_file_and_rekey() {
         ),
     )
     .unwrap();
-    fs::write(project.join(".pathrc"), "export TEAM=1\n").unwrap();
+    fs::write(project.join(".pathrc.toml"), "[common]\nenv.TEAM = \"1\"\n").unwrap();
     env.pathrc(&project).arg("encrypt").assert().success();
-    let sealed = project.join(".pathrc.age");
+    let sealed = project.join(".pathrc.toml.age");
     assert!(decrypt_with(&alice, &sealed).is_some());
     assert!(decrypt_with(&bob, &sealed).is_none());
 
@@ -198,7 +212,10 @@ fn recipients_file_and_rekey() {
     env.pathrc(&project).arg("allow").assert().success();
     env.pathrc(&project).arg("rekey").assert().success();
     assert!(decrypt_with(&alice, &sealed).is_none());
-    assert_eq!(decrypt_with(&bob, &sealed).unwrap(), "export TEAM=1\n");
+    assert_eq!(
+        decrypt_with(&bob, &sealed).unwrap(),
+        "[common]\nenv.TEAM = \"1\"\n"
+    );
     assert_eq!(
         env.loaded(&project, "echo $TEAM"),
         "1\n",
@@ -210,27 +227,33 @@ fn recipients_file_and_rekey() {
 fn edit_an_encrypted_file_in_a_private_temp_file() {
     let env = Env::new();
     let dir = tempdir();
-    let editor = env.editor("append.sh", "printf 'export ADDED=1\\n' >> \"$1\"");
+    let editor = env.editor(
+        "append.sh",
+        "printf '[common]\\nenv.ADDED = \"1\"\\n' >> \"$1\"",
+    );
     env.pathrc(dir.path())
         .args(["edit", "--encrypt"])
         .env("EDITOR", &editor)
         .assert()
         .success();
-    let sealed = dir.path().join(".pathrc.age");
+    let sealed = dir.path().join(".pathrc.toml.age");
     assert_eq!(
         env.decrypt(&sealed),
-        "export ADDED=1\n",
+        "[common]\nenv.ADDED = \"1\"\n",
         "template notes stripped"
     );
 
     // Editing again decrypts what is there.
-    let editor = env.editor("append2.sh", "printf 'export MORE=2\\n' >> \"$1\"");
+    let editor = env.editor("append2.sh", "printf 'env.MORE = \"2\"\\n' >> \"$1\"");
     env.pathrc(dir.path())
         .arg("edit")
         .env("EDITOR", &editor)
         .assert()
         .success();
-    assert_eq!(env.decrypt(&sealed), "export ADDED=1\nexport MORE=2\n");
+    assert_eq!(
+        env.decrypt(&sealed),
+        "[common]\nenv.ADDED = \"1\"\nenv.MORE = \"2\"\n"
+    );
     assert_eq!(
         env.loaded(dir.path(), "echo $ADDED$MORE"),
         "12\n",
@@ -250,11 +273,11 @@ fn edit_an_encrypted_file_in_a_private_temp_file() {
 }
 
 #[test]
-fn invalid_structure_is_not_saved_without_a_terminal() {
+fn an_invalid_file_is_not_saved_without_a_terminal() {
     let env = Env::new();
     let dir = tempdir();
-    fs::write(dir.path().join(".pathrc"), "export A=1\n").unwrap();
-    let editor = env.editor("typo.sh", "printf '#bahs\\nexport B=1\\n' >> \"$1\"");
+    fs::write(dir.path().join(".pathrc.toml"), "[common]\nenv.A = \"1\"\n").unwrap();
+    let editor = env.editor("typo.sh", "printf '[bahs]\\nenv.B = \"1\"\\n' >> \"$1\"");
     let out = env
         .pathrc(dir.path())
         .arg("edit")
@@ -264,12 +287,12 @@ fn invalid_structure_is_not_saved_without_a_terminal() {
     assert!(!out.status.success());
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
-        stderr.contains("line 2: unknown section '#bahs'"),
+        stderr.contains("line 3, column ") && stderr.contains("bahs"),
         "{stderr}"
     );
     assert_eq!(
-        fs::read_to_string(dir.path().join(".pathrc")).unwrap(),
-        "export A=1\n"
+        fs::read_to_string(dir.path().join(".pathrc.toml")).unwrap(),
+        "[common]\nenv.A = \"1\"\n"
     );
     assert_no_temp_left(&env);
 }
@@ -283,21 +306,21 @@ fn a_failing_or_interrupted_editor_saves_nothing_and_cleans_up() {
         .arg("--encrypt")
         .env(
             "EDITOR",
-            env.editor("first.sh", "echo 'export K=1' >> \"$1\""),
+            env.editor("first.sh", "printf '[common]\\nenv.K = \"1\"\\n' >> \"$1\""),
         )
         .assert()
         .success();
-    let sealed = dir.path().join(".pathrc.age");
+    let sealed = dir.path().join(".pathrc.toml.age");
     let before = fs::read(&sealed).unwrap();
 
-    let fails = env.editor("fails.sh", "echo 'export K=2' >> \"$1\"; exit 1");
+    let fails = env.editor("fails.sh", "echo 'env.K = \"2\"' >> \"$1\"; exit 1");
     // Ctrl-C reaches the whole foreground group; here pathrc gets SIGINT and
     // the editor then exits as an interrupted one would.
     let interrupted = env.editor(
         "interrupted.sh",
         // Walk up to pathrc: macOS's sh execs the editor, so pathrc is its
         // parent there, while dash leaves a shell in between.
-        "echo 'export K=3' >> \"$1\"
+        "echo 'env.K = \"3\"' >> \"$1\"
 p=$PPID
 while [ \"$p\" -gt 1 ]; do
   case $(ps -o comm= -p \"$p\") in *pathrc) kill -INT \"$p\"; break ;; esac

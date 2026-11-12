@@ -195,6 +195,8 @@ fn restore_var(name: &str, before: &Var, shell: Shell) -> String {
         return format!("unset {name}\n");
     };
     match shell {
+        // Unsetting zsh's PATH would untie it from path: assign it back.
+        Shell::Zsh if name == "PATH" => format!("{}\n", before.line),
         Shell::Zsh => format!("unset {name} 2>/dev/null\n{}\n", before.line),
         _ if before.flags.contains('A') => {
             format!("unset {name}\ndeclare -gA {name}={value}\n")

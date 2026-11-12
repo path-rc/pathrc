@@ -1,4 +1,4 @@
-//! Encrypted `.pathrc.age` files in `collate` and `list`.
+//! Encrypted `.pathrc.toml.age` files in `collate`, `list` and `show`.
 
 use age::secrecy::ExposeSecret;
 use assert_cmd::Command;
@@ -80,6 +80,9 @@ fn eval_in_bash(collated: &str, then: &str) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+/// The variables the mixed tree sets, in one line.
+const CHECK: &str = "echo \"$LAST|$WITHIN|$TOP|${MID-}|${IN-}|${TOP_SECRET-}|${ZSH_ONLY-}\"";
+
 fn seal_to(dir: &Path, plain: &str, recipient: &dyn age::Recipient) -> PathBuf {
     let encryptor = age::Encryptor::with_recipients(std::iter::once(recipient)).unwrap();
     let mut out = Vec::new();
@@ -88,7 +91,7 @@ fn seal_to(dir: &Path, plain: &str, recipient: &dyn age::Recipient) -> PathBuf {
     let mut writer = encryptor.wrap_output(armor).unwrap();
     writer.write_all(plain.as_bytes()).unwrap();
     writer.finish().unwrap().finish().unwrap();
-    let path = dir.join(".pathrc.age");
+    let path = dir.join(".pathrc.toml.age");
     fs::write(&path, out).unwrap();
     path
 }
@@ -99,13 +102,25 @@ fn mixed_tree(env: &Env) -> (tempfile::TempDir, PathBuf) {
     let mid = root.path().join("mid");
     let inner = mid.join("in");
     fs::create_dir_all(&inner).unwrap();
-    fs::write(root.path().join(".pathrc"), "export ORDER=top-plain\n").unwrap();
+    // Each file overrides LAST; WITHIN shows .age comes after plain.
+    fs::write(
+        root.path().join(".pathrc.toml"),
+        "[common]\nenv.LAST = \"top-plain\"\nenv.WITHIN = \"plain\"\nenv.TOP = \"top-plain\"\n",
+    )
+    .unwrap();
     env.seal(
         root.path(),
-        "export ORDER=\"$ORDER top-age\"\n#bash\nexport TOP_SECRET=s1\n#zsh\nexport ZSH_ONLY=no\n",
+        "[common]\nenv.LAST = \"top-age\"\nenv.WITHIN = \"age\"\n[bash]\nenv.TOP_SECRET = \"s1\"\n[zsh]\nenv.ZSH_ONLY = \"no\"\n",
     );
-    env.seal(&mid, "export ORDER=\"$ORDER mid-age\"\n");
-    fs::write(inner.join(".pathrc"), "export ORDER=\"$ORDER in-plain\"\n").unwrap();
+    env.seal(
+        &mid,
+        "[common]\nenv.LAST = \"mid-age\"\nenv.MID = \"mid-age\"\n",
+    );
+    fs::write(
+        inner.join(".pathrc.toml"),
+        "[common]\nenv.LAST = \"in-plain\"\nenv.IN = \"in-plain\"\n",
+    )
+    .unwrap();
     for dir in [root.path(), mid.as_path(), inner.as_path()] {
         env.allow_all(dir);
     }
@@ -119,9 +134,9 @@ fn encrypted_files_at_any_level_are_decrypted_in_order() {
     let (stdout, stderr) = env.collate(root.path(), &inner);
     assert!(stderr.is_empty(), "{stderr}");
     assert_eq!(
-        eval_in_bash(&stdout, "echo \"$ORDER|$TOP_SECRET|${ZSH_ONLY-}\""),
-        "top-plain top-age mid-age in-plain|s1|\n",
-        "in order, and sections apply inside .age files too"
+        eval_in_bash(&stdout, CHECK),
+        "in-plain|age|top-plain|mid-age|in-plain|s1|\n",
+        "in order, and shell tables apply inside .age files too"
     );
 }
 
@@ -141,12 +156,12 @@ fn list_marks_encrypted_files_without_decrypting() {
     assert!(
         listed.contains(&format!(
             "{}  [age]",
-            root.path().join(".pathrc.age").display()
+            root.path().join(".pathrc.toml.age").display()
         )),
         "{listed}"
     );
     assert!(
-        listed.contains(&format!("{}\n", root.path().join(".pathrc").display())),
+        listed.contains(&format!("{}\n", root.path().join(".pathrc.toml").display())),
         "{listed}"
     );
 }
@@ -169,11 +184,11 @@ fn a_wrong_or_missing_identity_reports_and_still_loads_plain_files() {
         assert!(output.status.success());
         let stdout = String::from_utf8(output.stdout).unwrap();
         let stderr = String::from_utf8(output.stderr).unwrap();
-        assert!(
-            stdout.contains("top-plain") && stdout.contains("in-plain"),
+        assert_eq!(
+            eval_in_bash(&stdout, CHECK),
+            "in-plain|plain|top-plain||in-plain||\n",
             "{stdout}"
         );
-        assert!(!stdout.contains("age"), "{stdout}");
         assert_eq!(stderr.matches("cannot decrypt").count(), 2, "{stderr}");
     }
 }
@@ -205,7 +220,7 @@ fn nothing_is_written_while_decrypting() {
         fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
     }
     assert!(stderr.is_empty(), "{stderr}");
-    assert!(stdout.contains("TOP_SECRET=s1"), "{stdout}");
+    assert!(eval_in_bash(&stdout, CHECK).ends_with("|s1|\n"), "{stdout}");
 }
 
 #[test]
@@ -223,7 +238,7 @@ fn an_ssh_ed25519_key_works_as_the_identity() {
     let public = fs::read_to_string(key.with_extension("pub")).unwrap();
     let recipient: age::ssh::Recipient = public.trim().parse().unwrap();
     let dir = tempdir();
-    seal_to(dir.path(), "export VIA_SSH=yes\n", &recipient);
+    seal_to(dir.path(), "[common]\nenv.VIA_SSH = \"yes\"\n", &recipient);
     env.allow_all(dir.path());
 
     // Found as ~/.ssh/id_ed25519 with no PATHRC_IDENTITY.
@@ -235,9 +250,12 @@ fn an_ssh_ed25519_key_works_as_the_identity() {
         .arg("collate")
         .output()
         .unwrap();
-    assert!(String::from_utf8(output.stdout)
-        .unwrap()
-        .contains("VIA_SSH=yes"));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        eval_in_bash(&stdout, "echo \"$VIA_SSH\""),
+        "yes\n",
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -253,17 +271,17 @@ fn show_prints_the_decrypted_cascade_for_a_shell() {
     let shown = String::from_utf8(output.stdout).unwrap();
     assert!(shown.starts_with(&format!(
         "# File: {}\n",
-        root.path().join(".pathrc").display()
+        root.path().join(".pathrc.toml").display()
     )));
-    // Evaluable as it stands, in order.
-    let script = format!("{shown}\necho \"$ORDER|$TOP_SECRET\"");
+    // Evaluable as it stands.
+    let script = format!("{shown}\n{CHECK}");
     let evaluated = std::process::Command::new("bash")
         .args(["-c", &script])
         .output()
         .unwrap();
     assert_eq!(
         String::from_utf8(evaluated.stdout).unwrap(),
-        "top-plain top-age mid-age in-plain|s1\n"
+        "in-plain|age|top-plain|mid-age|in-plain|s1|\n"
     );
 
     let zsh = env
@@ -291,7 +309,7 @@ fn show_fails_when_a_file_is_left_out() {
     assert!(!output.status.success());
     let shown = String::from_utf8(output.stdout).unwrap();
     assert!(
-        shown.contains("top-age") && !shown.contains("in-plain"),
+        shown.contains("mid-age") && !shown.contains("in-plain"),
         "{shown}"
     );
     assert!(String::from_utf8(output.stderr)

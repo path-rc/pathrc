@@ -17,6 +17,7 @@ pub mod init;
 pub mod list;
 pub mod manage;
 pub mod quote;
+pub mod settings;
 pub mod shell;
 pub mod show;
 pub mod state;
@@ -24,13 +25,16 @@ pub mod trust;
 pub mod undo;
 
 const AFTER_HELP: &str = "\
-Configuration lives in one .pathrc file per directory, and optionally an
-age-encrypted .pathrc.age beside it, read after it. Lines before any
-section marker apply to every shell; a line that is exactly #sh (bash and
-zsh), #bash, #zsh or #fish starts a section for those shells.
+Settings live in one .pathrc.toml file per directory, and optionally an
+age-encrypted .pathrc.toml.age beside it, read after it. [common] applies to
+every shell, [sh] to bash and zsh, and [bash], [zsh] and [fish] to one shell,
+each with env.NAME, alias.NAME, path.prepend and unset.env, unset.alias and
+unset.all. A shell's table overrides [common], and a deeper directory's file
+overrides an outer one. In bash and zsh, leaving a directory undoes what its
+files set.
 
-A file is only evaluated once you have allowed it with `pathrc allow`, and
-again after every change to it.";
+A file is only read once you have allowed it with `pathrc allow`, and again
+after every change to it.";
 
 #[derive(Parser, Debug)]
 #[command(version, author, about, long_about, after_help = AFTER_HELP)]
@@ -44,62 +48,63 @@ struct Cli {
 enum Commands {
     /// Initialises the shell: add `eval "$(pathrc init)"` to your shell rc file
     Init(InitArgs),
-    /// Prints the code that loads and unloads .pathrc files after a cd (run by the hook)
+    /// Prints the code that applies and undoes .pathrc.toml settings after a cd (run by the hook)
     Collate,
-    /// Lists the .pathrc files in scope in processing order, with any problems
+    /// Lists the .pathrc.toml files in scope in processing order, with any problems
     List,
-    /// Prints the decrypted configuration in scope for a shell, as shell code
-    /// you can read or `eval`
+    /// Prints the settings in effect here for a shell, decrypted, as shell
+    /// code you can read or `eval`
     Show {
-        /// The shell whose sections to print [default: PATHRC_SHELL]
+        /// The shell whose tables to read [default: PATHRC_SHELL]
         #[arg(long, short, value_enum)]
         shell: Option<ShowShell>,
     },
-    /// Creates or changes a .pathrc or .pathrc.age in $VISUAL/$EDITOR,
+    /// Creates or changes a .pathrc.toml or .pathrc.toml.age in $VISUAL/$EDITOR,
     /// decrypting and re-encrypting as needed
     #[command(
-        long_about = "Creates or changes a .pathrc or .pathrc.age in $VISUAL, $EDITOR or vi.\n\n\
-        With no file: .pathrc.age in this directory if it exists (or with --encrypt), else .pathrc. \
+        long_about = "Creates or changes a .pathrc.toml or .pathrc.toml.age in $VISUAL, $EDITOR or vi.\n\n\
+        With no file: .pathrc.toml.age in this directory if it exists (or with --encrypt), else \
+        .pathrc.toml. \
         An encrypted file is decrypted into a private temporary file under $XDG_RUNTIME_DIR, \
         removed afterwards, and encrypted again on save for the nearest .pathrc-recipients \
-        (else your own identity). The structure is checked on save (section markers, text): \
+        (else your own identity). The file is checked on save (TOML, tables, keys and names): \
         problems reopen the editor with notes at the top. The saved file is allowed."
     )]
     Edit {
         /// The file to edit
         file: Option<PathBuf>,
-        /// Make a new file encrypted (.pathrc.age)
+        /// Make a new file encrypted (.pathrc.toml.age)
         #[arg(long)]
         encrypt: bool,
         /// Allow the system temp directory when XDG_RUNTIME_DIR is not set
         #[arg(long)]
         tmp_ok: bool,
     },
-    /// Encrypts .pathrc to .pathrc.age for the nearest .pathrc-recipients (or
+    /// Encrypts .pathrc.toml to .pathrc.toml.age for the nearest .pathrc-recipients (or
     /// your identity), then removes the plaintext
     Encrypt {
-        /// The file [default: .pathrc here]
+        /// The file [default: .pathrc.toml here]
         file: Option<PathBuf>,
-        /// Replace an existing .pathrc.age
+        /// Replace an existing .pathrc.toml.age
         #[arg(long)]
         force: bool,
     },
-    /// Decrypts .pathrc.age back to a plain .pathrc, then removes the .age
+    /// Decrypts .pathrc.toml.age back to a plain .pathrc.toml, then removes the .age
     Decrypt {
-        /// The file [default: .pathrc.age here]
+        /// The file [default: .pathrc.toml.age here]
         file: Option<PathBuf>,
-        /// Replace an existing .pathrc
+        /// Replace an existing .pathrc.toml
         #[arg(long)]
         force: bool,
     },
-    /// Re-encrypts .pathrc.age files for the current recipients
+    /// Re-encrypts .pathrc.toml.age files for the current recipients
     Rekey {
-        /// Files [default: .pathrc.age here]
+        /// Files [default: .pathrc.toml.age here]
         files: Vec<PathBuf>,
     },
-    /// Allows files to be evaluated (default: the .pathrc and .pathrc.age here)
+    /// Allows files to be read (default: the .pathrc.toml and .pathrc.toml.age here)
     Allow(FilesArgs),
-    /// Stops files being evaluated (default: the .pathrc and .pathrc.age here)
+    /// Stops files being read (default: the .pathrc.toml and .pathrc.toml.age here)
     Deny(FilesArgs),
     /// Used by the init scripts: reads two shell snapshots on stdin and
     /// prints the code undoing the difference
