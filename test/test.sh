@@ -114,7 +114,15 @@ check "bash: an old-format .pathrc is not read" "-" \
 # A .pathrc.toml.age from pathrc 0.3 to 0.5 isn't read either; list says so.
 echo 'not read' > "$tree/old/.pathrc.toml.age"
 check "list marks an old .pathrc.toml.age" "1" \
-  "$(cd "$tree/old" && PATHRC_SHELL=bash PATHRC_START=$tree pathrc list | grep -c 'move its values into .enc tables')"
+  "$(cd "$tree/old" && PATHRC_SHELL=bash PATHRC_START=$tree pathrc list | grep -c 'pathrc.toml.age  \[old format: pathrc migrate\]')"
+
+# pathrc migrate turns an old .pathrc into a .pathrc.toml that applies.
+mig=$scratch/migrate
+mkdir -p "$mig"
+printf 'export MIGRATED=yes\nalias mg=true\n#zsh\nexport MZ=z\n' > "$mig/.pathrc"
+(cd "$mig" && pathrc allow .pathrc > /dev/null && pathrc migrate > /dev/null)
+check "bash: a migrated .pathrc applies" "yes|" \
+  "$(cd "$mig" && bash -c 'eval "$(pathrc init bash)"; echo "$MIGRATED|${MZ-}"' 2>&1)"
 
 # Secrets added with `pathrc secret`, given an age identity (made with the
 # age CLI if it is installed).

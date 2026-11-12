@@ -17,6 +17,7 @@ pub mod files;
 pub mod init;
 pub mod list;
 pub mod manage;
+pub mod migrate;
 pub mod quote;
 pub mod secrets;
 pub mod settings;
@@ -102,6 +103,23 @@ enum Commands {
         #[arg(long)]
         file: Option<PathBuf>,
     },
+    /// Converts older pathrc files here (.pathrc, .pathrc.age,
+    /// .pathrc.toml.age) into the .pathrc.toml
+    #[command(
+        long_about = "Converts older pathrc files into the directory's .pathrc.toml.\n\n\
+        .pathrc and .pathrc.age (pathrc 0.1, shell code in #sh, #bash, #zsh and #fish sections) \
+        are read line by line: export, plain assignments, alias, unset, unalias, prepending to \
+        PATH, and fish's set, alias and functions -e. Anything else (functions, conditions, \
+        commands, $ expansion) stops that directory's conversion and is listed with its line. \
+        .pathrc.toml.age (pathrc 0.3 to 0.5) is read as it is. Variables from an encrypted file \
+        go into .enc tables, each encrypted for the nearest .pathrc-recipients. A key already in \
+        .pathrc.toml stops the conversion. The result is allowed only if every file it came \
+        from was; the old files are left for you to delete."
+    )]
+    Migrate {
+        /// Directories [default: this one]
+        dirs: Vec<PathBuf>,
+    },
     /// Re-encrypts every .enc value for the current recipients
     Rekey {
         /// Files [default: .pathrc.toml here]
@@ -174,6 +192,7 @@ fn main() -> ExitCode {
             file: file.as_deref(),
         }),
         Commands::Rekey { files } => manage::handle_rekey(files),
+        Commands::Migrate { dirs } => migrate::handle_migrate(dirs),
         Commands::Allow(args) => handle_allow(&args.files),
         Commands::Deny(args) => handle_deny(&args.files),
     }

@@ -280,7 +280,7 @@ fn old_format_files_are_not_read_but_are_listed() {
     let listed = String::from_utf8(listed.stdout).unwrap();
     assert!(
         listed.contains(&format!(
-            "{}  [old format: convert it to .pathrc.toml]",
+            "{}  [old format: pathrc migrate]",
             dir.path().join(".pathrc").display()
         )),
         "{listed}"

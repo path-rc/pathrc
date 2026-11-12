@@ -38,7 +38,7 @@ fn kind_table_mut<'a>(
 }
 
 /// Replaces a string value, keeping its spacing and trailing comment.
-fn replace(value: &mut Value, text: &str) {
+pub(crate) fn replace(value: &mut Value, text: &str) {
     let decor = value.decor().clone();
     *value = Value::from(text);
     *value.decor_mut() = decor;
@@ -150,7 +150,7 @@ pub fn rekey(
 /// A sub-table, made if missing: implicit for the shell table (so the file
 /// gains `[common.enc]`, not an empty `[common]`), dotted for `env`/`var`
 /// (so the entry reads `env.NAME = "…"`).
-fn sub_table<'a>(
+pub(crate) fn sub_table<'a>(
     parent: &'a mut dyn TableLike,
     key: &str,
     how: Make,
@@ -169,7 +169,7 @@ fn sub_table<'a>(
 }
 
 #[derive(Clone, Copy)]
-enum Make {
+pub(crate) enum Make {
     Implicit,
     Header,
     Dotted,

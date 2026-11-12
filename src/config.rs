@@ -91,7 +91,7 @@ struct Unset {
 }
 
 impl Drop for Table {
-    // Values may be secrets from a decrypted .pathrc.toml.age.
+    // Values may be secrets (an .enc value, decrypted).
     fn drop(&mut self) {
         let values = self.env.values_mut();
         for value in values
