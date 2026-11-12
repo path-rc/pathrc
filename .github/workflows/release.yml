@@ -1,5 +1,13 @@
 name: Build Release Binaries
 
+# A push to main lets ccv tag a new version from the conventional commits
+# since the last tag. When it does, the same run builds the binaries and
+# publishes them as that tag's GitHub release: a tag pushed with the
+# workflow's own token would not start another workflow.
+#
+# Run it by hand with an existing tag to build and publish (or republish)
+# that tag's release.
+
 on:
   push:
     branches:
@@ -7,213 +15,136 @@ on:
     paths:
       - "**"
       - "!docs/**"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing tag to build and publish, e.g. v0.3.0
+        required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release-tag:
+    if: github.event_name == 'push'
     permissions:
       # create tag
       contents: write
     runs-on: ubuntu-latest
     outputs:
       new-tag: ${{ steps.ccv.outputs.new-tag }}
+      new-tag-version: ${{ steps.ccv.outputs.new-tag-version }}
     steps:
-    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      with:
-        fetch-depth: 0
-    - name: Bump tag if necessary
-      id: ccv
-      uses: smlx/ccv@7318e2f25a52dcd550e75384b84983973251a1f8 # v0.10.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Bump tag if necessary
+        id: ccv
+        uses: smlx/ccv@7318e2f25a52dcd550e75384b84983973251a1f8 # v0.10.0
 
-#   tag:
-#     runs-on: ubuntu-latest
+  build:
+    needs: release-tag
+    if: >-
+      !cancelled() && (github.event_name == 'workflow_dispatch'
+      || needs.release-tag.outputs.new-tag == 'true')
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || needs.release-tag.outputs.new-tag-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux binaries are static (musl), so they run on any distribution.
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    steps:
+      - name: Check the tag
+        run: |
+          tag="v${TAG#v}"
+          case $tag in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::'$TAG' is not a version tag like v1.2.3"; exit 1 ;;
+          esac
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
 
+      - name: Checkout the tag
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ env.TAG }}
 
-# # runs-on: ubuntu-22.04
-#     permissions:
-#       contents: write
-#     steps:
-#     - uses: actions/checkout@v6
-#       with:
-#         fetch-depth: '0'
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add "${{ matrix.target }}"
 
-#     - name: Bump version and push tag
-#       uses: anothrNick/github-tag-action@v1 # Don't use @master or @v1 unless you're happy to test the latest version
-#       env:
-#         GITHUB_TOKEN: ${{ secrets.MRD_PAT }} # if you don't want to set write permissions use a PAT token
+      - name: Install musl tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      - name: Stamp the version from the tag
+        # Cargo.toml's version is not bumped in commits; the tag is the version.
+        run: |
+          perl -pi -e 'if (!$done && s/^version = "[^"]*"/version = "$ENV{VERSION}"/) { $done = 1 }' Cargo.toml
+          grep -m1 '^version = ' Cargo.toml
+          cargo update --workspace
 
+      - name: Build
+        run: cargo build --release --locked --target "${{ matrix.target }}"
 
-    # steps:
-    #   - uses: actions/checkout@v6
-    #     with:
-    #       fetch-depth: 0
-    #   - id: semvertag
-    #     uses: modern-python/semvertag@v0
-    #     with:
-    #       strategy: conventional-commits
-    #   - if: steps.semvertag.outputs.status == 'created'
-    #     run: |
-    #         echo "tagged ${{ steps.semvertag.outputs.tag }}"
-    #         echo "bump=${{ steps.semvertag.outputs.bump }}"
+      - name: Test the binary
+        run: |
+          bin="target/${{ matrix.target }}/release/pathrc"
+          test "$("$bin" --version)" = "pathrc $VERSION"
+          eval "$("$bin" init sh)"
 
+      - name: Package
+        run: |
+          mkdir dist
+          archive="pathrc-${{ matrix.target }}.tar.gz"
+          tar -czf "dist/$archive" -C "target/${{ matrix.target }}/release" pathrc \
+            -C "$GITHUB_WORKSPACE" LICENSE README.md
+          (cd dist && shasum -a 256 "$archive" > "$archive.sha256")
+          cat "dist/$archive.sha256"
 
-      # - uses: actions/setup-python@v5
-      #   with:
-      #     python-version: "3.13"
-      # - run: pip install --quiet --no-cache-dir 'uv>=0.4,<1'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pathrc-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
 
-      # - uses: modern-python/semvertag@v0
-      #   id: version
-      #   with:
-      #     strategy: conventional-commits
-      #   if: steps.version.outputs.status == 'created'
-      #     run: |
-      #       echo "tagged ${{ steps.version.outputs.tag }}"
-      #       echo "bump=${{ steps.version.outputs.bump }}"
-  # version:
-  #   runs-on: ubuntu-latest
-  #   permissions:
-  #     contents: write
-  #   steps:
-  #     - uses: actions/checkout@v6
-  #       with:
-  #         fetch-depth: 0
-  #     -  uses: modern-python/semvertag@v0
-  #        with:
-  #         strategy: conventional-commits
-  #        id: version
-  #   outputs:
-  #     next: ${{ steps.version.outputs.tag }}
+  publish:
+    needs: [release-tag, build]
+    if: >-
+      !cancelled() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      # create the release and upload its files
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || needs.release-tag.outputs.new-tag-version }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
 
-  # validate:
-  #   runs-on: ubuntu-22.04
-  #   timeout-minutes: 5
-  #   outputs:
-  #     version: ${{ steps.validate.outputs.version }}
-  #   steps:
-  #     - uses: actions/checkout@v6
-
-  #     - uses: michaelklishin/rust-build-package-release-action@v3
-  #       id: validate
-  #       with:
-  #         command: validate-version
-
-  #     - uses: michaelklishin/rust-build-package-release-action@v3
-  #       with:
-  #         command: extract-changelog
-  #         version: ${{ steps.validate.outputs.version.next }}
-
-  #     - uses: actions/upload-artifact@v4
-  #       with:
-  #         name: release-notes
-  #         path: release_notes.md
-
-
-  # # changelog:
-  # #   name: Generate changelog
-  # #   runs-on: ubuntu-latest
-  # #   steps:
-  # #     - name: Checkout
-  # #       uses: actions/checkout@v6
-  # #       with:
-  # #         fetch-depth: 0
-
-  # #     - name: Generate a changelog
-  # #       uses: orhun/git-cliff-action@v4
-  # #       id: git-cliff
-  # #       with:
-  # #         config: cliff.toml
-  # #         args: --verbose
-  # #       env:
-  # #         OUTPUT: CHANGELOG.md
-
-  # #     - name: Print the changelog
-  # #       run: cat "${{ steps.git-cliff.outputs.changelog }}"
-
-  # build:
-  #   needs: validate
-  #   name: Build ${{ matrix.name }} Release Binaries
-  #   runs-on: ${{ matrix.os }}
-  #   timeout-minutes: 30
-  #   env:
-  #     version: ${{ needs.version.outputs.next }}
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       include:
-  #         - name: "macos-intel"
-  #           os: macos-15-intel
-  #           target: x86_64-apple-darwin
-  #           archive_suffix: macos-intel
-
-  #         - name: "macos-m1"
-  #           os: macos-15
-  #           target: aarch64-apple-darwin
-  #           archive_suffix: macos-m1
-
-  #         - name: "macos-m2"
-  #           os: macos-15
-  #           target: aarch64-apple-darwin
-  #           archive_suffix: macos-m2
-
-  #         - name: "linux-amd64"
-  #           os: ubuntu-24.04
-  #           target: x86_64-unknown-linux-gnu
-  #           archive_suffix: linux-amd64
-
-  #         - name: "linux-arm64"
-  #           os: ubuntu-24.04
-  #           target: aarch64-unknown-linux-gnu
-  #           archive_suffix: linux-arm64
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v6
-  #     - run: rustup toolchain install stable --profile minimal
-  #     - uses: michaelklishin/rust-build-package-release-action@v3
-  #       id: build
-  #       with:
-  #         command: release
-  #         version: ${{ needs.version.outputs.next }}
-  #         target: ${{ matrix.target }}
-  #         archive: "true"
-  #         locked: "true"
-  #         checksum: "sha256,sha512"
-  #         # notes-file: CHANGELOG.md
-  #     # Upload both bare binary and archive (for pipeline compatibility)
-  #     - uses: actions/upload-artifact@v7
-  #       with:
-  #         name: ${{ matrix.target }}
-  #         path: |
-  #           ${{ steps.build.outputs.bare_artifact_path }}
-  #           ${{ steps.build.outputs.bare_artifact_path }}.sha256
-  #           ${{ steps.build.outputs.artifact_path }}
-  #           ${{ steps.build.outputs.artifact_path }}.sha256
-  #           ${{ steps.build.outputs.artifact_path }}.sha512
-  # release:
-  #   needs: [validate, build]
-  #   runs-on: ubuntu-22.04
-  #   timeout-minutes: 10
-  #   steps:
-  #     - uses: actions/download-artifact@v4
-  #       with:
-  #         path: artifacts
-  #     - name: collect files
-  #       run: |
-  #         mkdir -p release
-  #             find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" -o -name "*.sha512" \) -exec cp {} release/ \;
-
-  #     - uses: softprops/action-gh-release@v2.6.1
-  #       with:
-  #         body_path: artifacts/release-notes/release_notes.md
-  #         files: release/*
-
-
-
-
-  #           # target/${{ matrix.target }}/release/pathrc
-  #           # target/${{ matrix.target }}/release/pathrc.tar.gz
-  #           # target/${{ matrix.target }}/release/pathrc.tar.gz.sha256
-  #           # target/${{ matrix.target }}/release/pathrc.tar.gz.sha512
+      - name: Publish the release
+        run: |
+          tag="v${TAG#v}"
+          ls -l dist
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" dist/* --verify-tag --generate-notes \
+              --title "$tag" --repo "$GITHUB_REPOSITORY"
+          fi
