@@ -11,7 +11,9 @@ repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 bin=${1:-$repo/target/debug/pathrc}
 [[ -x $bin ]] || { echo "no pathrc binary at $bin; run cargo build" >&2; exit 2; }
 
-scratch=$(mktemp -d)
+# Resolved: on macOS the temp directory is under /var, a symlink to
+# /private/var, and pathrc reports resolved paths.
+scratch=$(cd "$(mktemp -d)" && pwd -P)
 trap 'chmod -R u+rwx "$scratch" 2>/dev/null; rm -rf "$scratch"' EXIT
 mkdir -p "$scratch/bin" "$scratch/home"
 ln -s "$bin" "$scratch/bin/pathrc"
