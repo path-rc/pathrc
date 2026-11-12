@@ -1,4 +1,4 @@
-// The hero terminal: an encrypted .pathrc.toml.age, `cd` into its directory,
+// The hero terminal: a .pathrc.toml with an encrypted value, `cd` into its directory,
 // and the cd hook's shell code scrambling out of the ciphertext; then `cd ..`
 // undoing it. The hook lines are what `pathrc collate` prints for the shell
 // to evaluate (it does so silently; they are shown here to make it visible).
@@ -16,14 +16,14 @@
 
   // Each step: a typed command, printed lines, a scrambled line or a pause.
   var script = [
-    { cmd: "cat prod/.pathrc.toml.age", at: top },
-    { out: "-----BEGIN AGE ENCRYPTED FILE-----", cls: "cipher" },
-    { out: "YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgy", cls: "cipher" },
-    { out: "NTUxOSBuV2dIcUZ3b1k2eVBrdHJ6TmFmT2h6", cls: "cipher" },
-    { out: "-----END AGE ENCRYPTED FILE-----", cls: "cipher" },
+    { cmd: "cat prod/.pathrc.toml", at: top },
+    { out: "[common]", cls: "" },
+    { out: "env.AWS_REGION = \"eu-west-1\"", cls: "" },
+    { out: "[common.enc]", cls: "" },
+    { out: "env.AWS_ACCOUNT_ID = \"YWdlLWVuY3J5cHRpb24ub3JnL3Yx…\"", cls: "cipher" },
     { pause: 700 },
     { cmd: "cd prod", at: top },
-    { out: "  # cd hook: .pathrc.toml.age decrypted in memory", cls: "note" },
+    { out: "  # cd hook: [common.enc] decrypted in memory", cls: "note" },
     { scramble: "  export AWS_ACCOUNT_ID='111111111111'", cls: "set" },
     { scramble: "  export AWS_REGION='eu-west-1'", cls: "set" },
     { pause: 500 },

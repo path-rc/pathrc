@@ -98,21 +98,29 @@ pub fn recipients_for(dir: &Path) -> Result<(Vec<Box<dyn Recipient + Send>>, Str
     Ok((recipients, source))
 }
 
-/// Encrypts to `recipients`, ASCII-armored so it diffs sanely in git.
-pub fn encrypt(plain: &[u8], recipients: &[Box<dyn Recipient + Send>]) -> Result<Vec<u8>, String> {
+/// Encrypts a `.enc` value to `recipients`: an age message, unarmored, as
+/// one line of base64.
+pub fn seal_value(
+    plain: &[u8],
+    recipients: &[Box<dyn Recipient + Send>],
+) -> Result<String, String> {
+    use base64::Engine;
     let encryptor =
         age::Encryptor::with_recipients(recipients.iter().map(|r| r.as_ref() as &dyn Recipient))
             .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
-    let armor = age::armor::ArmoredWriter::wrap_output(&mut out, age::armor::Format::AsciiArmor)
-        .map_err(|e| e.to_string())?;
-    let mut writer = encryptor.wrap_output(armor).map_err(|e| e.to_string())?;
+    let mut writer = encryptor.wrap_output(&mut out).map_err(|e| e.to_string())?;
     writer.write_all(plain).map_err(|e| e.to_string())?;
-    writer
-        .finish()
-        .and_then(|armor| armor.finish())
-        .map_err(|e| e.to_string())?;
-    Ok(out)
+    writer.finish().map_err(|e| e.to_string())?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(out))
+}
+
+/// The age message in a `.enc` value.
+pub fn unbase64(value: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .map_err(|e| format!("not base64: {e}"))
 }
 
 #[cfg(test)]
@@ -123,21 +131,20 @@ mod tests {
     fn round_trip_with_an_x25519_identity() {
         let identity = age::x25519::Identity::generate();
         let recipients: Vec<Box<dyn Recipient + Send>> = vec![Box::new(identity.to_public())];
-        let sealed = encrypt(b"export SECRET=1\n", &recipients).unwrap();
-        assert!(sealed.starts_with(b"-----BEGIN AGE ENCRYPTED FILE-----"));
+        let sealed = seal_value(b"s3cret", &recipients).unwrap();
+        assert!(!sealed.contains('\n'));
+        let bytes = unbase64(&sealed).unwrap();
+        assert!(bytes.starts_with(b"age-encryption.org/v1\n"));
 
         let identities = Identities(vec![Box::new(identity)]);
-        assert_eq!(
-            &identities.decrypt(&sealed).unwrap()[..],
-            b"export SECRET=1\n"
-        );
+        assert_eq!(&identities.decrypt(&bytes).unwrap()[..], b"s3cret");
     }
 
     #[test]
     fn the_wrong_identity_is_an_error_not_a_panic() {
         let right = age::x25519::Identity::generate();
         let recipients: Vec<Box<dyn Recipient + Send>> = vec![Box::new(right.to_public())];
-        let sealed = encrypt(b"x", &recipients).unwrap();
+        let sealed = unbase64(&seal_value(b"x", &recipients).unwrap()).unwrap();
         let wrong = Identities(vec![Box::new(age::x25519::Identity::generate())]);
         assert!(wrong.decrypt(&sealed).is_err());
         assert!(wrong.decrypt(b"not age at all").is_err());

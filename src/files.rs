@@ -3,32 +3,28 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The configuration file name, the same for every shell.
+/// The configuration file name, the same for every shell. Secrets live in
+/// it too, in `.enc` tables (RFC 0003).
 pub const PLAIN: &str = ".pathrc.toml";
-/// The same, encrypted with age. Read after `.pathrc.toml` in the same
-/// directory, so a secret can override a default.
-pub const ENCRYPTED: &str = ".pathrc.toml.age";
-/// The marker-section files of pathrc 0.1 (RFC 0001), no longer read;
-/// `list` points at `pathrc migrate` for them.
-pub const OLD: [&str; 2] = [".pathrc", ".pathrc.age"];
+/// Files of older pathrc versions, no longer read: the marker-section
+/// files of 0.1 (RFC 0001) and the whole-file `.pathrc.toml.age` of 0.3 to
+/// 0.5 (RFC 0002). `list` marks them.
+pub const OLD: [&str; 3] = [".pathrc", ".pathrc.age", ".pathrc.toml.age"];
 
 /// A configuration file in scope.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfigFile {
     pub path: PathBuf,
-    pub encrypted: bool,
 }
 
-/// The configuration files in one directory, in reading order.
+/// The configuration file in one directory, if there is one.
 pub fn in_dir(dir: &Path) -> Vec<ConfigFile> {
-    [(PLAIN, false), (ENCRYPTED, true)]
-        .into_iter()
-        .map(|(name, encrypted)| ConfigFile {
-            path: dir.join(name),
-            encrypted,
-        })
-        .filter(|file| file.path.is_file())
-        .collect()
+    let path = dir.join(PLAIN);
+    if path.is_file() {
+        vec![ConfigFile { path }]
+    } else {
+        Vec::new()
+    }
 }
 
 /// Old-format files in one directory.
@@ -41,7 +37,7 @@ pub fn old_in_dir(dir: &Path) -> Vec<PathBuf> {
 
 /// The configuration files from `start` (or the filesystem root, when `cwd`
 /// is not inside `start`) down to `cwd`: outermost directory first, and
-/// within a directory `.pathrc.toml` before `.pathrc.toml.age`.
+/// one file per directory.
 pub fn find(cwd: &Path, start: Option<&Path>) -> Vec<ConfigFile> {
     dirs(cwd, start).iter().flat_map(|d| in_dir(d)).collect()
 }
@@ -100,39 +96,19 @@ mod tests {
     }
 
     #[test]
-    fn plain_comes_before_encrypted_in_a_directory() {
-        let root = tempfile::tempdir().unwrap();
-        let inner = root.path().join("a");
-        fs::create_dir_all(&inner).unwrap();
-        for dir in [root.path(), inner.as_path()] {
-            fs::write(dir.join(ENCRYPTED), "").unwrap();
-            fs::write(dir.join(PLAIN), "").unwrap();
-        }
-        let found: Vec<_> = find(&inner, Some(root.path()))
-            .into_iter()
-            .map(|f| (f.path, f.encrypted))
-            .collect();
-        assert_eq!(
-            found,
-            vec![
-                (root.path().join(PLAIN), false),
-                (root.path().join(ENCRYPTED), true),
-                (inner.join(PLAIN), false),
-                (inner.join(ENCRYPTED), true),
-            ]
-        );
-    }
-
-    #[test]
     fn ignores_old_files_but_can_list_them() {
         let root = tempfile::tempdir().unwrap();
-        for name in [".pathrc-bash", ".pathrc", ".pathrc.age"] {
+        for name in [".pathrc-bash", ".pathrc", ".pathrc.age", ".pathrc.toml.age"] {
             fs::write(root.path().join(name), "").unwrap();
         }
         assert!(find(root.path(), Some(root.path())).is_empty());
         assert_eq!(
             old_in_dir(root.path()),
-            vec![root.path().join(".pathrc"), root.path().join(".pathrc.age")]
+            vec![
+                root.path().join(".pathrc"),
+                root.path().join(".pathrc.age"),
+                root.path().join(".pathrc.toml.age")
+            ]
         );
     }
 }

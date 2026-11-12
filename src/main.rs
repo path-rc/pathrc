@@ -18,6 +18,7 @@ pub mod init;
 pub mod list;
 pub mod manage;
 pub mod quote;
+pub mod secrets;
 pub mod settings;
 pub mod shell;
 pub mod show;
@@ -25,8 +26,7 @@ pub mod state;
 pub mod trust;
 
 const AFTER_HELP: &str = "\
-Settings live in one .pathrc.toml file per directory, and optionally an
-age-encrypted .pathrc.toml.age beside it, read after it. [common] applies to
+Settings live in one .pathrc.toml file per directory. [common] applies to
 every shell, [sh] to bash and zsh, and [bash], [zsh] and [fish] to one shell,
 each with env.NAME (exported), var.NAME (not exported), alias.NAME,
 path.prepend and unset.env, unset.var, unset.alias and unset.all. Each table
@@ -61,52 +61,55 @@ enum Commands {
         #[arg(long, short, value_enum)]
         shell: Option<ShowShell>,
     },
-    /// Creates or changes a .pathrc.toml or .pathrc.toml.age in $VISUAL/$EDITOR,
-    /// decrypting and re-encrypting as needed
+    /// Creates or changes a .pathrc.toml in $VISUAL/$EDITOR, showing its
+    /// encrypted values decrypted
     #[command(
-        long_about = "Creates or changes a .pathrc.toml or .pathrc.toml.age in $VISUAL, $EDITOR or vi.\n\n\
-        With no file: .pathrc.toml.age in this directory if it exists (or with --encrypt), else \
-        .pathrc.toml. \
-        An encrypted file is decrypted into a private temporary file under $XDG_RUNTIME_DIR, \
-        removed afterwards, and encrypted again on save for the nearest .pathrc-recipients \
-        (else your own identity). The file is checked on save (TOML, tables, keys and names): \
-        problems reopen the editor with notes at the top. The saved file is allowed."
+        long_about = "Creates or changes a .pathrc.toml in $VISUAL, $EDITOR or vi.\n\n\
+        With no file: .pathrc.toml in this directory. Values in .enc tables are shown \
+        decrypted in a private temporary file (under $XDG_RUNTIME_DIR when the file has any), \
+        removed afterwards. On save, new and changed .enc values are encrypted for the nearest \
+        .pathrc-recipients (else your own identity); unchanged ones keep their ciphertext, so \
+        a diff shows only what changed. The file is checked on save (TOML, tables, keys and \
+        names): problems reopen the editor with notes at the top. The saved file is allowed."
     )]
     Edit {
         /// The file to edit
         file: Option<PathBuf>,
-        /// Make a new file encrypted (.pathrc.toml.age)
-        #[arg(long)]
-        encrypt: bool,
         /// Allow the system temp directory when XDG_RUNTIME_DIR is not set
         #[arg(long)]
         tmp_ok: bool,
     },
-    /// Encrypts .pathrc.toml to .pathrc.toml.age for the nearest .pathrc-recipients (or
-    /// your identity), then removes the plaintext
-    Encrypt {
+    /// Adds or replaces an encrypted value in a .enc table, reading it
+    /// without echo (or from stdin)
+    #[command(
+        long_about = "Adds or replaces an encrypted value in a .enc table.\n\n\
+        The value is typed without echo at a terminal, or read from stdin (less one final \
+        newline), so it never appears in your shell history. It is encrypted for the nearest \
+        .pathrc-recipients (else your own identity) and set as env.NAME, or var.NAME with \
+        --var, in [common.enc] or the table you name. A new file is allowed; an existing one \
+        stays allowed only if it was."
+    )]
+    Secret {
+        /// The variable's name
+        name: String,
+        /// Set it as a shell variable, not exported (var.NAME)
+        #[arg(long)]
+        var: bool,
+        /// The table: common, sh, bash, zsh or fish
+        #[arg(long, default_value = "common")]
+        table: String,
         /// The file [default: .pathrc.toml here]
-        file: Option<PathBuf>,
-        /// Replace an existing .pathrc.toml.age
         #[arg(long)]
-        force: bool,
-    },
-    /// Decrypts .pathrc.toml.age back to a plain .pathrc.toml, then removes the .age
-    Decrypt {
-        /// The file [default: .pathrc.toml.age here]
         file: Option<PathBuf>,
-        /// Replace an existing .pathrc.toml
-        #[arg(long)]
-        force: bool,
     },
-    /// Re-encrypts .pathrc.toml.age files for the current recipients
+    /// Re-encrypts every .enc value for the current recipients
     Rekey {
-        /// Files [default: .pathrc.toml.age here]
+        /// Files [default: .pathrc.toml here]
         files: Vec<PathBuf>,
     },
-    /// Allows files to be read (default: the .pathrc.toml and .pathrc.toml.age here)
+    /// Allows files to be read (default: the .pathrc.toml here)
     Allow(FilesArgs),
-    /// Stops files being read (default: the .pathrc.toml and .pathrc.toml.age here)
+    /// Stops files being read (default: the .pathrc.toml here)
     Deny(FilesArgs),
 }
 
@@ -155,17 +158,21 @@ fn main() -> ExitCode {
         }
         Commands::List => handle_list(),
         Commands::Show { shell } => show::handle_show(shell.map(Into::into)),
-        Commands::Edit {
-            file,
-            encrypt,
-            tmp_ok,
-        } => edit::handle_edit(edit::EditArgs {
+        Commands::Edit { file, tmp_ok } => edit::handle_edit(edit::EditArgs {
             file: file.as_deref(),
-            encrypt: *encrypt,
             tmp_ok: *tmp_ok,
         }),
-        Commands::Encrypt { file, force } => manage::handle_encrypt(file.as_deref(), *force),
-        Commands::Decrypt { file, force } => manage::handle_decrypt(file.as_deref(), *force),
+        Commands::Secret {
+            name,
+            var,
+            table,
+            file,
+        } => manage::handle_secret(manage::SecretArgs {
+            name,
+            var: *var,
+            table,
+            file: file.as_deref(),
+        }),
         Commands::Rekey { files } => manage::handle_rekey(files),
         Commands::Allow(args) => handle_allow(&args.files),
         Commands::Deny(args) => handle_deny(&args.files),

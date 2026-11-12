@@ -111,17 +111,22 @@ echo 'export OLD=ran' > "$tree/old/.pathrc"
 check "bash: an old-format .pathrc is not read" "-" \
   "$(run_posix bash bash 'cd old; echo "-$OLD"')"
 
-# An encrypted file, made with the age CLI if it is installed.
+# A .pathrc.toml.age from pathrc 0.3 to 0.5 isn't read either; list says so.
+echo 'not read' > "$tree/old/.pathrc.toml.age"
+check "list marks an old .pathrc.toml.age" "1" \
+  "$(cd "$tree/old" && PATHRC_SHELL=bash PATHRC_START=$tree pathrc list | grep -c 'move its values into .enc tables')"
+
+# Secrets added with `pathrc secret`, given an age identity (made with the
+# age CLI if it is installed).
 if command -v age-keygen > /dev/null && command -v age > /dev/null; then
   mkdir -p "$XDG_CONFIG_HOME/pathrc" "$tree/secret"
   age-keygen -o "$XDG_CONFIG_HOME/pathrc/identity" 2> /dev/null
-  printf '[common]\nenv.TOKEN = "from-age"\n[zsh]\nenv.TOKEN = "zsh-age"\n' |
-    age -a -r "$(age-keygen -y "$XDG_CONFIG_HOME/pathrc/identity")" > "$tree/secret/.pathrc.toml.age"
-  (cd "$tree/secret" && pathrc allow > /dev/null)
-  check "bash: .pathrc.toml.age is decrypted" "from-age" \
+  (cd "$tree/secret" && printf from-age | pathrc secret TOKEN > /dev/null &&
+    printf zsh-age | pathrc secret TOKEN --table zsh > /dev/null)
+  check "bash: a value from pathrc secret is decrypted" "from-age" \
     "$(run_posix bash bash 'cd secret; echo "$TOKEN"')"
   if command -v zsh > /dev/null; then
-    check "zsh: shell tables apply inside .pathrc.toml.age" "zsh-age" \
+    check "zsh: [zsh.enc] overrides [common.enc]" "zsh-age" \
       "$(run_posix zsh zsh 'cd secret; echo "$TOKEN"')"
   fi
 else
@@ -154,9 +159,8 @@ unset.alias = ["where"]
 PATHRC
 printf '[common]\nenv.WEB = "1"\n' > "$uw/client/web/.pathrc.toml"
 printf '[common]\nunset.all = true\nenv.FRESH = "1"\n' > "$uw/client/fresh/.pathrc.toml"
-if command -v age > /dev/null && [[ -f $XDG_CONFIG_HOME/pathrc/identity ]]; then
-  printf '[common]\nenv.CLIENT_TOKEN = "secret"\n' |
-    age -a -r "$(age-keygen -y "$XDG_CONFIG_HOME/pathrc/identity")" > "$uw/client/.pathrc.toml.age"
+if [[ -f $XDG_CONFIG_HOME/pathrc/identity ]]; then
+  (cd "$uw/client" && printf secret | pathrc secret CLIENT_TOKEN > /dev/null)
   token=secret
 else
   token= # no age CLI: the tree is plain only
@@ -197,10 +201,11 @@ eu|||||own||bin
 fi
 
 # Only a newly entered file is read: going deeper doesn't decrypt the outer
-# levels again, and a cd within scope decrypts nothing.
+# levels again, and a cd within scope decrypts nothing. (client has one
+# encrypted value, so entering it decrypts once.)
 if [[ -n $token ]]; then
   out=$(cd "$uw" && PATHRC_DEBUG=1 bash -c 'eval "$(pathrc init bash)"; cd client; cd api; cd deep; cd ..; cd deep; cd ../../web' 2>&1)
-  check "bash: client's .age is decrypted once, entering client" "1" "$(grep -c 'decrypting' <<< "$out")"
+  check "bash: client's secret is decrypted once, entering client" "1" "$(grep -c 'decrypting' <<< "$out")"
 fi
 
 # var: a shell variable that child programs don't see, even when it shadows

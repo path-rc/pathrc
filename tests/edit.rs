@@ -1,4 +1,4 @@
-//! `pathrc edit`, `encrypt`, `decrypt` and `rekey`.
+//! `pathrc edit`, `secret` and `rekey`.
 
 use age::secrecy::ExposeSecret;
 use assert_cmd::Command;
@@ -77,8 +77,20 @@ impl Env {
         fs::read_to_string(self.home.path().join("editor.log")).unwrap_or_default()
     }
 
-    fn decrypt(&self, file: &Path) -> String {
-        decrypt_with(&self.key, file).expect("decrypts with the user's key")
+    /// The plaintext of `[table.enc] kind.name` in `file`.
+    fn plain(&self, file: &Path, table: &str, kind: &str, name: &str) -> String {
+        decrypt_with(&self.key, &sealed(file, table, kind, name))
+            .expect("decrypts with the user's key")
+    }
+
+    /// `pathrc secret` with `value` on stdin.
+    fn secret(&self, cwd: &Path, args: &[&str], value: &str) -> std::process::Output {
+        self.pathrc(cwd)
+            .arg("secret")
+            .args(args)
+            .write_stdin(value)
+            .output()
+            .unwrap()
     }
 
     /// What the cd hook would set for `cwd`, as `echo`ed by `then`.
@@ -103,9 +115,19 @@ impl Env {
     }
 }
 
-fn decrypt_with(key: &age::x25519::Identity, file: &Path) -> Option<String> {
-    let bytes = fs::read(file).ok()?;
-    let decryptor = age::Decryptor::new(age::armor::ArmoredReader::new(&bytes[..])).ok()?;
+/// The base64 value of `[table.enc] kind.name` in `file`.
+fn sealed(file: &Path, table: &str, kind: &str, name: &str) -> String {
+    let text = fs::read_to_string(file).unwrap();
+    let doc: toml::Table = toml::from_str(&text).unwrap();
+    doc[table]["enc"][kind][name].as_str().unwrap().to_string()
+}
+
+fn decrypt_with(key: &age::x25519::Identity, value: &str) -> Option<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .ok()?;
+    let decryptor = age::Decryptor::new(&bytes[..]).ok()?;
     let mut reader = decryptor
         .decrypt(std::iter::once(key as &dyn age::Identity))
         .ok()?;
@@ -123,66 +145,88 @@ fn assert_no_temp_left(env: &Env) {
 }
 
 #[test]
-fn encrypt_then_decrypt_round_trip_keeps_trust() {
+fn secret_adds_an_encrypted_value_and_allows_a_new_file() {
     let env = Env::new();
     let dir = tempdir();
-    fs::write(
-        dir.path().join(".pathrc.toml"),
-        "[common]\nenv.SECRET = \"1\"\n",
-    )
-    .unwrap();
-    env.pathrc(dir.path()).arg("allow").assert().success();
-
-    env.pathrc(dir.path()).arg("encrypt").assert().success();
-    let sealed = dir.path().join(".pathrc.toml.age");
+    let out = env.secret(dir.path(), &["API_TOKEN", "--var"], "it's a \"token\"\n");
     assert!(
-        !dir.path().join(".pathrc.toml").exists(),
-        "plaintext removed"
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    assert!(fs::read_to_string(&sealed)
-        .unwrap()
-        .starts_with("-----BEGIN AGE ENCRYPTED FILE-----"));
-    assert_eq!(env.decrypt(&sealed), "[common]\nenv.SECRET = \"1\"\n");
-    assert_eq!(
-        env.loaded(dir.path(), "echo $SECRET"),
-        "1\n",
-        "still allowed"
+    let file = dir.path().join(".pathrc.toml");
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(
+        text.starts_with("[common.enc]\nvar.API_TOKEN = \""),
+        "{text}"
     );
-
-    // Refuses to replace without --force.
-    fs::write(
-        dir.path().join(".pathrc.toml"),
-        "[common]\nenv.OTHER = \"1\"\n",
-    )
-    .unwrap();
-    env.pathrc(dir.path()).arg("encrypt").assert().failure();
-    fs::remove_file(dir.path().join(".pathrc.toml")).unwrap();
-
-    env.pathrc(dir.path()).arg("decrypt").assert().success();
-    let plain = dir.path().join(".pathrc.toml");
+    assert!(
+        !text.contains("token"),
+        "the value is not in the file: {text}"
+    );
+    // One final newline is dropped; the rest is kept exactly.
     assert_eq!(
-        fs::read_to_string(&plain).unwrap(),
-        "[common]\nenv.SECRET = \"1\"\n"
+        env.plain(&file, "common", "var", "API_TOKEN"),
+        "it's a \"token\""
     );
     assert_eq!(
-        fs::metadata(&plain).unwrap().permissions().mode() & 0o777,
-        0o600
+        env.loaded(
+            dir.path(),
+            "echo \"$API_TOKEN|$(sh -c 'echo ${API_TOKEN-unexported}')\""
+        ),
+        "it's a \"token\"|unexported\n",
+        "a new file is allowed, and var is not exported"
     );
-    assert!(!sealed.exists());
-    assert_eq!(env.loaded(dir.path(), "echo $SECRET"), "1\n");
 }
 
 #[test]
-fn encrypting_an_unallowed_file_does_not_allow_it() {
+fn secret_replaces_a_value_and_moves_it_between_env_and_var() {
+    let env = Env::new();
+    let dir = tempdir();
+    let file = dir.path().join(".pathrc.toml");
+    fs::write(&file, "# kept\n[common]\nenv.REGION = \"eu\"\n").unwrap();
+    env.pathrc(dir.path()).arg("allow").assert().success();
+    assert!(env
+        .secret(dir.path(), &["TOKEN", "--var"], "one")
+        .status
+        .success());
+    assert!(env.secret(dir.path(), &["TOKEN"], "two").status.success());
+    assert!(env
+        .secret(dir.path(), &["ZSH_ONLY", "--table", "zsh"], "z")
+        .status
+        .success());
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(
+        text.starts_with("# kept\n[common]\nenv.REGION = \"eu\"\n"),
+        "{text}"
+    );
+    assert!(!text.contains("var.TOKEN"), "{text}");
+    assert_eq!(env.plain(&file, "common", "env", "TOKEN"), "two");
+    assert_eq!(env.plain(&file, "zsh", "env", "ZSH_ONLY"), "z");
+    assert_eq!(
+        env.loaded(dir.path(), "echo \"$REGION|$TOKEN|${ZSH_ONLY-}\""),
+        "eu|two|\n",
+        "still allowed, and bash doesn't read [zsh.enc]"
+    );
+    let bad = env.secret(dir.path(), &["X", "--table", "tcsh"], "v");
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("no table [tcsh]"));
+    let bad = env.secret(dir.path(), &["A-B"], "v");
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("not a variable name"));
+}
+
+#[test]
+fn secret_on_an_unallowed_file_does_not_allow_it() {
     let env = Env::new();
     let dir = tempdir();
     fs::write(dir.path().join(".pathrc.toml"), "[common]\nenv.X = \"1\"\n").unwrap();
-    let out = env.pathrc(dir.path()).arg("encrypt").output().unwrap();
+    let out = env.secret(dir.path(), &["S"], "s");
     assert!(out.status.success());
     assert!(String::from_utf8(out.stdout)
         .unwrap()
         .contains("not allowed yet"));
-    assert_eq!(env.loaded(dir.path(), "echo \"-${X-}\""), "-\n");
+    assert_eq!(env.loaded(dir.path(), "echo \"-${X-}${S-}\""), "-\n");
 }
 
 #[test]
@@ -203,24 +247,29 @@ fn recipients_file_and_rekey() {
         ),
     )
     .unwrap();
-    fs::write(project.join(".pathrc.toml"), "[common]\nenv.TEAM = \"1\"\n").unwrap();
-    env.pathrc(&project).arg("encrypt").assert().success();
-    let sealed = project.join(".pathrc.toml.age");
-    assert!(decrypt_with(&alice, &sealed).is_some());
-    assert!(decrypt_with(&bob, &sealed).is_none());
+    assert!(env.secret(&project, &["TEAM"], "1").status.success());
+    let file = project.join(".pathrc.toml");
+    let value = sealed(&file, "common", "env", "TEAM");
+    assert!(decrypt_with(&alice, &value).is_some());
+    assert!(decrypt_with(&bob, &value).is_none());
 
     fs::write(
         team.path().join(".pathrc-recipients"),
         format!("{}\n{}\n", env.key.to_public(), bob.to_public()),
     )
     .unwrap();
-    env.pathrc(&project).arg("allow").assert().success();
-    env.pathrc(&project).arg("rekey").assert().success();
-    assert!(decrypt_with(&alice, &sealed).is_none());
-    assert_eq!(
-        decrypt_with(&bob, &sealed).unwrap(),
-        "[common]\nenv.TEAM = \"1\"\n"
+    let out = env.pathrc(&project).arg("rekey").output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
+    assert!(String::from_utf8(out.stdout)
+        .unwrap()
+        .starts_with("re-encrypted 1 value in "));
+    let value = sealed(&file, "common", "env", "TEAM");
+    assert!(decrypt_with(&alice, &value).is_none());
+    assert_eq!(decrypt_with(&bob, &value).unwrap(), "1");
     assert_eq!(
         env.loaded(&project, "echo $TEAM"),
         "1\n",
@@ -229,40 +278,60 @@ fn recipients_file_and_rekey() {
 }
 
 #[test]
-fn edit_an_encrypted_file_in_a_private_temp_file() {
+fn edit_shows_secrets_decrypted_and_reencrypts_only_what_changed() {
     let env = Env::new();
     let dir = tempdir();
+    let file = dir.path().join(".pathrc.toml");
+    fs::write(&file, "[common]\nenv.PLAIN = \"p\"\n").unwrap();
+    env.pathrc(dir.path()).arg("allow").assert().success();
+    for (name, value) in [("KEEP", "kept"), ("CHANGE", "old")] {
+        assert!(env.secret(dir.path(), &[name], value).status.success());
+    }
+    let keep_before = sealed(&file, "common", "env", "KEEP");
+    // The editor keeps a copy of what it was shown, changes one value and
+    // adds a new one in plain text.
+    let shown = env.home.path().join("shown.toml");
     let editor = env.editor(
-        "append.sh",
-        "printf '[common]\\nenv.ADDED = \"1\"\\n' >> \"$1\"",
+        "change.sh",
+        &format!(
+            "cp \"$1\" '{}'\nsed -i.bak 's/\"old\"/\"new\"/' \"$1\"\nrm -f \"$1.bak\"\nprintf 'var.ADDED = \"fresh\"\\n' >> \"$1\"",
+            shown.display()
+        ),
     );
-    env.pathrc(dir.path())
-        .args(["edit", "--encrypt"])
-        .env("EDITOR", &editor)
-        .assert()
-        .success();
-    let sealed = dir.path().join(".pathrc.toml.age");
-    assert_eq!(
-        env.decrypt(&sealed),
-        "[common]\nenv.ADDED = \"1\"\n",
-        "template notes stripped"
-    );
-
-    // Editing again decrypts what is there.
-    let editor = env.editor("append2.sh", "printf 'env.MORE = \"2\"\\n' >> \"$1\"");
-    env.pathrc(dir.path())
+    let out = env
+        .pathrc(dir.path())
         .arg("edit")
         .env("EDITOR", &editor)
-        .assert()
-        .success();
-    assert_eq!(
-        env.decrypt(&sealed),
-        "[common]\nenv.ADDED = \"1\"\nenv.MORE = \"2\"\n"
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("2 values encrypted"), "{stdout}");
+
+    let shown = fs::read_to_string(&shown).unwrap();
+    assert!(
+        shown.contains("env.KEEP = \"kept\"") && shown.contains("env.CHANGE = \"old\""),
+        "{shown}"
+    );
+    assert!(
+        shown.starts_with("# pathrc: values in .enc tables are shown decrypted"),
+        "{shown}"
     );
     assert_eq!(
-        env.loaded(dir.path(), "echo $ADDED$MORE"),
-        "12\n",
-        "saved file is allowed"
+        sealed(&file, "common", "env", "KEEP"),
+        keep_before,
+        "unchanged ciphertext"
+    );
+    assert_eq!(env.plain(&file, "common", "env", "CHANGE"), "new");
+    assert_eq!(env.plain(&file, "common", "var", "ADDED"), "fresh");
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(
+        !text.contains("pathrc:") && !text.contains("\"new\""),
+        "{text}"
     );
 
     let log = env.editor_log();
@@ -275,6 +344,25 @@ fn edit_an_encrypted_file_in_a_private_temp_file() {
         assert_eq!(mode, "-rw-------", "{log}");
     }
     assert_no_temp_left(&env);
+}
+
+#[test]
+fn a_new_file_gets_plain_text_typed_into_enc_encrypted() {
+    let env = Env::new();
+    let dir = tempdir();
+    let editor = env.editor(
+        "new.sh",
+        "printf '[common]\\nenv.A = \"a\"\\n[common.enc]\\nenv.S = \"typed\"\\n' >> \"$1\"",
+    );
+    env.pathrc(dir.path())
+        .arg("edit")
+        .env("EDITOR", &editor)
+        .assert()
+        .success();
+    let file = dir.path().join(".pathrc.toml");
+    assert_eq!(env.plain(&file, "common", "env", "S"), "typed");
+    assert!(!fs::read_to_string(&file).unwrap().contains("typed"));
+    assert_eq!(env.loaded(dir.path(), "echo \"$A|$S\""), "a|typed\n");
 }
 
 #[test]
@@ -306,17 +394,9 @@ fn an_invalid_file_is_not_saved_without_a_terminal() {
 fn a_failing_or_interrupted_editor_saves_nothing_and_cleans_up() {
     let env = Env::new();
     let dir = tempdir();
-    env.pathrc(dir.path())
-        .arg("edit")
-        .arg("--encrypt")
-        .env(
-            "EDITOR",
-            env.editor("first.sh", "printf '[common]\\nenv.K = \"1\"\\n' >> \"$1\""),
-        )
-        .assert()
-        .success();
-    let sealed = dir.path().join(".pathrc.toml.age");
-    let before = fs::read(&sealed).unwrap();
+    assert!(env.secret(dir.path(), &["K"], "1").status.success());
+    let file = dir.path().join(".pathrc.toml");
+    let before = fs::read(&file).unwrap();
 
     let fails = env.editor("fails.sh", "echo 'env.K = \"2\"' >> \"$1\"; exit 1");
     // Ctrl-C reaches the whole foreground group; here pathrc gets SIGINT and
@@ -344,18 +424,32 @@ sleep 0.2; exit 130",
         assert!(String::from_utf8(out.stderr)
             .unwrap()
             .contains("nothing saved"));
-        assert_eq!(fs::read(&sealed).unwrap(), before);
+        assert_eq!(fs::read(&file).unwrap(), before);
         assert_no_temp_left(&env);
     }
 }
 
 #[test]
-fn edit_refuses_disk_temp_for_encrypted_files_without_runtime_dir() {
+fn edit_needs_a_runtime_dir_only_for_a_file_with_secrets() {
     let env = Env::new();
     let dir = tempdir();
+    fs::write(dir.path().join(".pathrc.toml"), "[common]\nenv.A = \"1\"\n").unwrap();
+    let plain = env
+        .pathrc(dir.path())
+        .arg("edit")
+        .env_remove("XDG_RUNTIME_DIR")
+        .env("EDITOR", "true")
+        .output()
+        .unwrap();
+    assert!(
+        plain.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    assert!(env.secret(dir.path(), &["S"], "s").status.success());
     let out = env
         .pathrc(dir.path())
-        .args(["edit", "--encrypt"])
+        .arg("edit")
         .env_remove("XDG_RUNTIME_DIR")
         .env("EDITOR", "true")
         .output()

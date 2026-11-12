@@ -65,7 +65,7 @@
         </div>
         <pre class="terminal-body" aria-hidden="true" id="terminal"></pre>
         <figcaption id="terminal-caption" class="visually-hidden">
-          A terminal: an encrypted .pathrc.toml.age in prod; cd prod decrypts it in memory and sets
+          A terminal: prod's .pathrc.toml holds an encrypted value; cd prod decrypts it in memory and sets
           AWS_ACCOUNT_ID=111111111111 and AWS_REGION=eu-west-1; echo prints the account; cd .. unsets
           AWS_ACCOUNT_ID and restores AWS_REGION=eu-west-2.
         </figcaption>
@@ -88,8 +88,9 @@
         </article>
         <article class="card">
           <h3>Encrypted with age</h3>
-          <p>A <code>.pathrc.toml.age</code> is decrypted in memory with your age or SSH key, never written to
-            disk. <code>pathrc edit</code> opens it in your editor and encrypts it again for your team.</p>
+          <p>Values in a <code>[common.enc]</code> table are decrypted in memory with your age or SSH key,
+            never written to disk. <code>pathrc secret</code> adds one without echo; <code>pathrc edit</code>
+            shows them decrypted and encrypts what you change for your team.</p>
         </article>
         <article class="card">
           <h3>Undone when you leave</h3>
@@ -112,11 +113,13 @@
     <section class="band secrets">
       <div class="secrets-text">
         <h2>Secrets stay secret until you need them</h2>
-        <p>Put credentials in a <code>.pathrc.toml.age</code> and commit it with the project. It's encrypted with
-          <a href="https://age-encryption.org">age</a> for everyone listed in the nearest
-          <code>.pathrc-recipients</code>, using their age or SSH public keys.</p>
-        <p>When you <code>cd</code> in, pathrc decrypts it in memory with your own key and sets the variables.
-          The plaintext never touches the disk, and leaving the directory unsets them again.</p>
+        <p>Put credentials in the <code>.enc</code> tables of the project's <code>.pathrc.toml</code> and commit
+          it. Each value is encrypted with <a href="https://age-encryption.org">age</a> for everyone listed in
+          the nearest <code>.pathrc-recipients</code>, using their age or SSH public keys, while the names stay
+          readable, so a review shows which secret changed.</p>
+        <p>When you <code>cd</code> in, pathrc decrypts them in memory with your own key and sets the variables.
+          The plaintext never touches the disk, and leaving the directory unsets them again. A <code>var</code>
+          is kept from the programs you start altogether.</p>
       </div>
       <img class="secrets-art" src="assets/img/encrypted-to-env.webp" width="560" height="419" loading="lazy"
         decoding="async"
@@ -135,11 +138,13 @@ path.prepend = [<span class="s">"bin"</span>]
 alias.tfp = <span class="s">"terraform plan"</span></code></pre>
         </div>
         <div class="file">
-          <p class="file-name">aws-project/prod/.pathrc.toml.age <span class="tag">encrypted</span></p>
+          <p class="file-name">aws-project/prod/.pathrc.toml <span class="tag">1 encrypted value</span></p>
           <pre><code><span class="c">[common]</span>
-env.AWS_ACCOUNT_ID = <span class="s">"111111111111"</span>
 env.AWS_REGION = <span class="s">"eu-west-1"</span>  <span class="m"># only prod differs</span>
-unset.env = [<span class="s">"AWS_PROFILE"</span>]</code></pre>
+unset.env = [<span class="s">"AWS_PROFILE"</span>]
+
+<span class="c">[common.enc]</span>
+env.AWS_ACCOUNT_ID = <span class="s">"YWdlLWVuY3J5cHRpb24ub3Jn…"</span></code></pre>
         </div>
       </div>
     </section>
@@ -166,7 +171,7 @@ pathrc init fish | source         <span class="m"># ~/.config/fish/config.fish</
       <div class="command">
         <pre><code>cd ~/work/aws-project
 pathrc edit              <span class="m"># create .pathrc.toml in $EDITOR; saving allows it</span>
-pathrc edit --encrypt    <span class="m"># or .pathrc.toml.age, for secrets</span>
+pathrc secret AWS_ACCOUNT_ID   <span class="m"># add a secret, typed without echo</span>
 pathrc list              <span class="m"># the files in scope, and any problems</span></code></pre>
       </div>
       <p class="small">Other platforms can build from source with

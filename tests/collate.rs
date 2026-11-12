@@ -170,7 +170,7 @@ fn allow_without_a_file_in_the_directory_fails() {
     assert!(!output.status.success());
     assert!(String::from_utf8(output.stderr)
         .unwrap()
-        .contains("no .pathrc.toml or .pathrc.toml.age file"));
+        .contains("no .pathrc.toml in "));
 }
 
 #[test]

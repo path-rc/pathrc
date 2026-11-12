@@ -4,8 +4,8 @@
 //! `.pathrc.toml` could put its own `bin` in front of `PATH`, or alias a
 //! command you use, the moment you enter it. Nothing is applied
 //! until `pathrc allow` has recorded the file's path and the SHA-256 of its
-//! bytes in `$XDG_DATA_HOME/pathrc/allowed`. For an encrypted file that is
-//! the hash of the ciphertext, so checking trust never needs decryption.
+//! bytes in `$XDG_DATA_HOME/pathrc/allowed`. A file's `.enc` values are
+//! hashed as ciphertext, so checking trust never needs decryption.
 
 use sha2::{Digest, Sha256};
 use std::fs;

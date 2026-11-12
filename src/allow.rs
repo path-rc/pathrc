@@ -1,7 +1,7 @@
 //! `pathrc allow` and `pathrc deny`.
 
 use crate::common::current_dir;
-use crate::files::{in_dir, ENCRYPTED, PLAIN};
+use crate::files::{in_dir, PLAIN};
 use crate::trust::Store;
 use std::fs;
 use std::path::PathBuf;
@@ -15,10 +15,7 @@ fn targets(files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     let cwd = current_dir()?;
     let found: Vec<_> = in_dir(&cwd).into_iter().map(|f| f.path).collect();
     if found.is_empty() {
-        return Err(format!(
-            "no {PLAIN} or {ENCRYPTED} file in {}",
-            cwd.display()
-        ));
+        return Err(format!("no {PLAIN} in {}", cwd.display()));
     }
     Ok(found)
 }

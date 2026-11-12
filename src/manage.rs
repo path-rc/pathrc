@@ -1,12 +1,14 @@
-//! `pathrc encrypt`, `decrypt` and `rekey`, so nobody handles age by hand.
+//! `pathrc secret` and `rekey`, so nobody handles age by hand, and the file
+//! helpers `edit` shares.
 //!
-//! A file pathrc rewrites stays allowed if the file it came from was
-//! allowed; it never becomes trusted just by being rewritten.
+//! A file pathrc rewrites stays allowed if it was allowed; it never becomes
+//! trusted just by being rewritten.
 
 use crate::common::current_dir;
-use crate::config::validate;
-use crate::crypto::{encrypt, recipients_for, Identities};
-use crate::files::{ENCRYPTED, PLAIN};
+use crate::config::{describe, validate};
+use crate::crypto::{recipients_for, seal_value, unbase64, Identities};
+use crate::files::PLAIN;
+use crate::secrets;
 use crate::trust::{Store, Trust};
 use std::fs;
 use std::io::Write;
@@ -95,58 +97,77 @@ fn run(action: impl FnOnce() -> Result<String, String>) -> ExitCode {
     }
 }
 
-pub fn handle_encrypt(file: Option<&Path>, force: bool) -> ExitCode {
-    run(|| {
-        let plain_path = default_file(file, PLAIN)?;
-        let sealed_path = dir_of(&plain_path).join(ENCRYPTED);
-        if sealed_path.exists() && !force {
-            return Err(format!(
-                "{} already exists; edit it with 'pathrc edit', or --force to replace it",
-                sealed_path.display()
-            ));
-        }
-        let plain = zeroize::Zeroizing::new(read(&plain_path)?);
-        let problems = validate(&plain);
-        if !problems.is_empty() {
-            let list: Vec<_> = problems.iter().map(|p| p.to_string()).collect();
-            return Err(format!("{}: {}", plain_path.display(), list.join("; ")));
-        }
-        let (recipients, source) = recipients_for(&dir_of(&plain_path))?;
-        let sealed = encrypt(&plain, &recipients)?;
-        write_atomic(&sealed_path, &sealed, 0o644)?;
-        let allowed = carry_trust(&plain_path, &plain, &sealed_path, &sealed)?;
-        fs::remove_file(&plain_path).map_err(|e| format!("{}: {e}", plain_path.display()))?;
-        Ok(format!(
-            "encrypted {} to {} for {source}; removed the plaintext{}",
-            plain_path.display(),
-            sealed_path.display(),
-            trust_note(allowed, &sealed_path)
-        ))
-    })
+pub struct SecretArgs<'a> {
+    pub name: &'a str,
+    pub var: bool,
+    pub table: &'a str,
+    pub file: Option<&'a Path>,
 }
 
-pub fn handle_decrypt(file: Option<&Path>, force: bool) -> ExitCode {
+/// The value to store: typed without echo at a terminal (pinentry if there
+/// is one), else everything on stdin less one final newline.
+fn read_value(name: &str) -> Result<zeroize::Zeroizing<String>, String> {
+    use std::io::{IsTerminal, Read};
+    if std::io::stdin().is_terminal() {
+        use age::secrecy::ExposeSecret;
+        let secret =
+            age::cli_common::read_secret(&format!("pathrc: the value for {name}"), name, None)
+                .map_err(|e| format!("cannot read the value: {e}"))?;
+        return Ok(zeroize::Zeroizing::new(secret.expose_secret().to_string()));
+    }
+    let mut value = zeroize::Zeroizing::new(String::new());
+    std::io::stdin()
+        .read_to_string(&mut value)
+        .map_err(|e| format!("cannot read the value from stdin: {e}"))?;
+    if value.ends_with('\n') {
+        value.pop();
+        if value.ends_with('\r') {
+            value.pop();
+        }
+    }
+    Ok(value)
+}
+
+pub fn handle_secret(args: SecretArgs) -> ExitCode {
     run(|| {
-        let sealed_path = default_file(file, ENCRYPTED)?;
-        let plain_path = dir_of(&sealed_path).join(PLAIN);
-        if plain_path.exists() && !force {
+        if !secrets::TABLES.contains(&args.table) {
             return Err(format!(
-                "{} already exists; --force to replace it",
-                plain_path.display()
+                "no table [{}]; tables are {}",
+                args.table,
+                secrets::TABLES.join(", ")
             ));
         }
-        let sealed = read(&sealed_path)?;
-        let plain = Identities::load()?
-            .decrypt(&sealed)
-            .map_err(|e| format!("{}: cannot decrypt: {e}", sealed_path.display()))?;
-        write_atomic(&plain_path, &plain, 0o600)?;
-        let allowed = carry_trust(&sealed_path, &sealed, &plain_path, &plain)?;
-        fs::remove_file(&sealed_path).map_err(|e| format!("{}: {e}", sealed_path.display()))?;
+        let path = default_file(args.file, PLAIN)?;
+        let existed = path.exists();
+        let before = if existed { read(&path)? } else { Vec::new() };
+        let text = String::from_utf8(before.clone())
+            .map_err(|_| format!("{}: not UTF-8 text", path.display()))?;
+        let (recipients, source) = recipients_for(&dir_of(&path))?;
+        let value = read_value(args.name)?;
+        let sealed = seal_value(value.as_bytes(), &recipients)?;
+        let kind = if args.var { "var" } else { "env" };
+        let after = secrets::set(&text, args.table, kind, args.name, &sealed)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let problems = validate(after.as_bytes());
+        if !problems.is_empty() {
+            return Err(format!("{}: {}", path.display(), describe(&problems)));
+        }
+        write_atomic(&path, after.as_bytes(), 0o644)?;
+        // A new file is yours; an existing one stays as trusted as it was.
+        let allowed = if existed {
+            carry_trust(&path, &before, &path, after.as_bytes())?
+        } else {
+            let mut store = Store::load()?;
+            store.allow(&path, after.as_bytes());
+            store.save()?;
+            true
+        };
         Ok(format!(
-            "decrypted {} to {}{}",
-            sealed_path.display(),
-            plain_path.display(),
-            trust_note(allowed, &plain_path)
+            "set [{}.enc] {kind}.{} in {} (encrypted for {source}){}",
+            args.table,
+            args.name,
+            path.display(),
+            trust_note(allowed, &path)
         ))
     })
 }
@@ -154,23 +175,36 @@ pub fn handle_decrypt(file: Option<&Path>, force: bool) -> ExitCode {
 pub fn handle_rekey(files: &[PathBuf]) -> ExitCode {
     run(|| {
         let files = if files.is_empty() {
-            vec![default_file(None, ENCRYPTED)?]
+            vec![default_file(None, PLAIN)?]
         } else {
             files.to_vec()
         };
         let identities = Identities::load()?;
         let mut report = Vec::new();
         for path in files {
-            let sealed = read(&path)?;
-            let plain = identities
-                .decrypt(&sealed)
-                .map_err(|e| format!("{}: cannot decrypt: {e}", path.display()))?;
+            let before = read(&path)?;
+            let text = String::from_utf8(before.clone())
+                .map_err(|_| format!("{}: not UTF-8 text", path.display()))?;
             let (recipients, source) = recipients_for(&dir_of(&path))?;
-            let resealed = encrypt(&plain, &recipients)?;
-            write_atomic(&path, &resealed, 0o644)?;
-            let allowed = carry_trust(&path, &sealed, &path, &resealed)?;
+            let (after, count) = secrets::rekey(
+                &text,
+                &mut |sealed| {
+                    identities
+                        .decrypt(&unbase64(sealed)?)
+                        .map_err(|e| format!("cannot decrypt: {e}"))
+                },
+                &mut |plain| seal_value(plain, &recipients),
+            )
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+            if count == 0 {
+                report.push(format!("{}: no encrypted values", path.display()));
+                continue;
+            }
+            write_atomic(&path, after.as_bytes(), 0o644)?;
+            let allowed = carry_trust(&path, &before, &path, after.as_bytes())?;
             report.push(format!(
-                "re-encrypted {} for {source}{}",
+                "re-encrypted {count} value{} in {} for {source}{}",
+                if count == 1 { "" } else { "s" },
                 path.display(),
                 trust_note(allowed, &path)
             ));
