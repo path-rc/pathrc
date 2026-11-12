@@ -1,0 +1,13 @@
+{
+  "name": "path-rc",
+  "short_name": "path-rc",
+  "description": "Per-directory environment variables, aliases and PATH for bash, zsh and fish.",
+  "start_url": "/",
+  "display": "browser",
+  "background_color": "#0a0f1a",
+  "theme_color": "#0a0f1a",
+  "icons": [
+    { "src": "assets/img/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "assets/img/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
