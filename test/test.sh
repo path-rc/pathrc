@@ -187,6 +187,39 @@ if [[ -n $token ]]; then
   check "bash: no decryption while staying in scope" "1" "$(grep -c 'decrypting' <<< "$out")"
 fi
 
+# var: a shell variable that child programs don't see, even when it shadows
+# one the user exported; leaving restores the user's, still exported.
+vp=$scratch/varproj
+mkdir -p "$vp/in"
+printf '[common]\nvar.SHELL_ONLY = "yes"\nenv.EXPORTED = "yes"\n' > "$vp/in/.pathrc.toml"
+(cd "$vp/in" && pathrc allow > /dev/null)
+child='$(sh -c "echo \${SHELL_ONLY-none}")'
+for sh in bash zsh; do
+  command -v "$sh" > /dev/null || continue
+  check "$sh: var is set, not exported, and the user's export comes back" \
+    "yes|none|yes
+mine|mine" \
+    "$(cd "$vp" && SHELL_ONLY=mine "$sh" -c "eval \"\$(pathrc init $sh)\"; cd in
+      echo \"\$SHELL_ONLY|$child|\$EXPORTED\"; cd ..; echo \"\$SHELL_ONLY|$child\"" 2>&1)"
+done
+if command -v fish > /dev/null; then
+  check "fish: var is set but not exported" "yes|none" \
+    "$(cd "$vp" && fish --no-config -c 'pathrc init fish | source; cd in; echo "$SHELL_ONLY|"(sh -c "echo \${SHELL_ONLY-none}")' 2>&1)"
+fi
+
+# An .enc value made with the age CLI, as the error message suggests.
+if command -v age > /dev/null && [[ -f $XDG_CONFIG_HOME/pathrc/identity ]]; then
+  ep=$scratch/encproj
+  mkdir -p "$ep"
+  sealed=$(printf %s 'enc-secret' | age -r "$(age-keygen -y "$XDG_CONFIG_HOME/pathrc/identity")" | base64 | tr -d '\n')
+  printf '[common]\nenv.VISIBLE = "plain"\n[common.enc]\nenv.HIDDEN = "%s"\n' "$sealed" > "$ep/.pathrc.toml"
+  (cd "$ep" && pathrc allow > /dev/null)
+  check "bash: an .enc value from the age CLI is decrypted" "plain|enc-secret" \
+    "$(cd "$ep" && bash -c 'eval "$(pathrc init bash)"; echo "$VISIBLE|$HIDDEN"' 2>&1)"
+  check "list counts it without decrypting" "1" \
+    "$(cd "$ep" && PATHRC_SHELL=bash PATHRC_START=$ep PATHRC_IDENTITY=/nonexistent pathrc list | grep -c '\[1 encrypted value\]')"
+fi
+
 # show prints the cascade as plain code that can be evaluated.
 check "bash: eval \$(pathrc show) gives the same values" "sub yes" \
   "$(cd "$tree/project/sub" && PATHRC_SHELL=bash PATHRC_START=$tree bash -c 'eval "$(pathrc show)"; echo "$LEVEL $TOP_SH"' 2>&1)"
@@ -204,7 +237,11 @@ if [[ -n $target ]] && command -v curl > /dev/null; then
   archive=pathrc-$target.tar.gz
   mkdir -p "$release"
   tar -czf "$release/$archive" -C "$(dirname "$bin")" pathrc
-  (cd "$release" && shasum -a 256 "$archive" > "$archive.sha256")
+  if command -v sha256sum > /dev/null; then
+    (cd "$release" && sha256sum "$archive" > "$archive.sha256")
+  else
+    (cd "$release" && shasum -a 256 "$archive" > "$archive.sha256")
+  fi
   check "install.sh installs the release for this platform" "$("$bin" --version)" \
     "$(PATHRC_DOWNLOAD_URL="file://$release" PATHRC_INSTALL_DIR="$scratch/installed" \
       sh "$repo/docs/install.sh" 2> /dev/null && "$scratch/installed/pathrc" --version)"

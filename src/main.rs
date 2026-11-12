@@ -28,10 +28,12 @@ const AFTER_HELP: &str = "\
 Settings live in one .pathrc.toml file per directory, and optionally an
 age-encrypted .pathrc.toml.age beside it, read after it. [common] applies to
 every shell, [sh] to bash and zsh, and [bash], [zsh] and [fish] to one shell,
-each with env.NAME, alias.NAME, path.prepend and unset.env, unset.alias and
-unset.all. A shell's table overrides [common], and a deeper directory's file
-overrides an outer one. In bash and zsh, leaving a directory undoes what its
-files set.
+each with env.NAME (exported), var.NAME (not exported), alias.NAME,
+path.prepend and unset.env, unset.var, unset.alias and unset.all. Each table
+can have an .enc table ([common.enc] ...) of env and var values encrypted with
+age, one line of base64 each. A shell's table overrides [common], and a deeper
+directory's file overrides an outer one. In bash and zsh, leaving a directory
+undoes what its files set.
 
 A file is only read once you have allowed it with `pathrc allow`, and again
 after every change to it.";

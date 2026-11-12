@@ -93,9 +93,11 @@ Each table can have:
 | Key            | Meaning                                                  |
 |----------------|----------------------------------------------------------|
 | `env.NAME`     | set and export `NAME`                                    |
+| `var.NAME`     | set `NAME` in the shell without exporting it             |
 | `alias.NAME`   | define alias `NAME`                                      |
 | `path.prepend` | put these directories at the front of `PATH`             |
 | `unset.env`    | remove these variables while here, even ones you set     |
+| `unset.var`    | the same, for shell variables                            |
 | `unset.alias`  | remove these aliases while here                          |
 | `unset.all`    | ignore everything the outer directories' files set       |
 
@@ -105,6 +107,38 @@ overrides the same key in `[common]`, and a deeper directory's file overrides
 an outer one. Within a file, `unset` applies first, then `env`, `path` and
 `alias`. Shell functions, completions and options belong in your shell's own
 rc files.
+
+A `var` is seen by the shell and its aliases but not by programs you start,
+so an alias can use a secret without every command inheriting it:
+`alias.api = "curl -H \"Authorization: Bearer $API_TOKEN\""` with
+`var.API_TOKEN`. The shell expands `$API_TOKEN` when the alias runs.
+
+#### Secrets: `.enc` tables
+
+Each table can have an `.enc` table, `[common.enc]`, `[sh.enc]` and so on,
+holding `env` and `var` values encrypted with
+[age](https://age-encryption.org): each value one line of base64, decrypted
+in memory when you enter the directory. Names stay readable, so a diff shows
+which secret changed. A table's `.enc` applies straight after it, so a secret
+overrides a plain default of the same name.
+
+```toml
+[common]
+env.AWS_REGION = "eu-west-1"
+
+[common.enc]
+env.AWS_ACCOUNT_ID = "YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBu…"
+var.API_TOKEN = "YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBv…"
+```
+
+Until `pathrc secret` arrives, make a value with the age CLI:
+
+```shell
+printf %s 'the-secret' | age -r "$(age-keygen -y ~/.config/pathrc/identity)" | base64 | tr -d '\n'
+```
+
+`pathrc list` shows how many encrypted values a file has, without decrypting.
+If a value can't be decrypted, the file is skipped and the value is named.
 
 `pathrc list` and `pathrc edit` report a mistake with its line and column:
 an unknown table or key, a value that is not a string, or a name that is not

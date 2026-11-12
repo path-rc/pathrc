@@ -1,4 +1,5 @@
-//! Encrypted `.pathrc.toml.age` files in `collate`, `list` and `show`.
+//! Encrypted `.pathrc.toml.age` files and `.enc` values in `collate`,
+//! `list` and `show`.
 
 use age::secrecy::ExposeSecret;
 use assert_cmd::Command;
@@ -323,4 +324,107 @@ fn show_fails_when_a_file_is_left_out() {
         .output()
         .unwrap();
     assert!(!uninit.status.success());
+}
+
+/// One value for a `.enc` table: an age message for `recipient`, unarmored,
+/// as one line of base64.
+fn seal_value(plain: &str, recipient: &dyn age::Recipient) -> String {
+    use base64::Engine;
+    let encryptor = age::Encryptor::with_recipients(std::iter::once(recipient)).unwrap();
+    let mut out = Vec::new();
+    let mut writer = encryptor.wrap_output(&mut out).unwrap();
+    writer.write_all(plain.as_bytes()).unwrap();
+    writer.finish().unwrap();
+    base64::engine::general_purpose::STANDARD.encode(out)
+}
+
+/// A .pathrc.toml with plain settings and a [common.enc] table.
+fn enc_file(env: &Env, dir: &Path) -> PathBuf {
+    let r = env.recipient.as_ref();
+    let file = dir.join(".pathrc.toml");
+    fs::write(
+        &file,
+        format!(
+            "[common]\nenv.PLAIN = \"plain\"\nenv.SECRET = \"default\"\n\
+             alias.api = \"curl -H \\\"Authorization: Bearer $TOKEN\\\"\"\n\
+             [common.enc]\nenv.SECRET = \"{}\"\nvar.TOKEN = \"{}\"\n",
+            seal_value("from-enc", r),
+            seal_value("t0ken 'quoted'", r),
+        ),
+    )
+    .unwrap();
+    env.allow_all(dir);
+    file
+}
+
+#[test]
+fn enc_values_are_decrypted_and_a_var_is_not_exported() {
+    let env = Env::new();
+    let dir = tempdir();
+    enc_file(&env, dir.path());
+    let (stdout, stderr) = env.collate(dir.path(), dir.path());
+    assert!(stderr.is_empty(), "{stderr}");
+    assert_eq!(
+        eval_in_bash(
+            &stdout,
+            "echo \"$PLAIN|$SECRET|$TOKEN|$(sh -c 'echo ${TOKEN-not exported}')|$(alias api)\""
+        ),
+        "plain|from-enc|t0ken 'quoted'|not exported|alias api='curl -H \"Authorization: Bearer $TOKEN\"'\n"
+    );
+}
+
+#[test]
+fn a_wrong_identity_names_the_value_and_skips_the_file() {
+    let env = Env::new();
+    let dir = tempdir();
+    let file = enc_file(&env, dir.path());
+    let wrong = env.home.path().join("wrong.txt");
+    let other = age::x25519::Identity::generate();
+    fs::write(&wrong, format!("{}\n", other.to_string().expose_secret())).unwrap();
+    let output = env
+        .pathrc(dir.path(), dir.path())
+        .env("PATHRC_IDENTITY", &wrong)
+        .arg("collate")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.starts_with(&format!(
+            "pathrc: {}: [common.enc] env.SECRET: cannot decrypt",
+            file.display()
+        )),
+        "{stderr}"
+    );
+    // A half-applied file would be confusing: none of it is applied.
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn list_counts_enc_values_without_decrypting_and_show_decrypts_them() {
+    let env = Env::new();
+    let dir = tempdir();
+    let file = enc_file(&env, dir.path());
+    let listed = env
+        .pathrc(dir.path(), dir.path())
+        .env("PATHRC_IDENTITY", dir.path().join("missing"))
+        .arg("list")
+        .output()
+        .unwrap();
+    let listed = String::from_utf8(listed.stdout).unwrap();
+    assert!(
+        listed.contains(&format!("{}  [2 encrypted values]", file.display())),
+        "{listed}"
+    );
+    let shown = env
+        .pathrc(dir.path(), dir.path())
+        .arg("show")
+        .output()
+        .unwrap();
+    assert!(shown.status.success());
+    let shown = String::from_utf8(shown.stdout).unwrap();
+    assert!(
+        shown.contains("export SECRET='from-enc'") && shown.contains("unset TOKEN\nTOKEN="),
+        "{shown}"
+    );
 }

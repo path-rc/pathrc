@@ -26,13 +26,15 @@ const NEW_FILE: &str = "\
 # pathrc: a new .pathrc.toml. Tables: [common] for every shell, [sh] for
 # pathrc: bash and zsh, then [bash], [zsh] and [fish]. Keys in each table:
 # pathrc:   env.NAME = \"value\"        set and export a variable
+# pathrc:   var.NAME = \"value\"        set a shell variable, not exported
 # pathrc:   alias.NAME = \"command\"    define an alias
 # pathrc:   path.prepend = [\"bin\"]    put directories in front of PATH
-# pathrc:   unset.env = [\"NAME\"]      remove variables while here
+# pathrc:   unset.env = [\"NAME\"]      remove variables while here (unset.var too)
 # pathrc:   unset.alias = [\"NAME\"]    remove aliases while here
 # pathrc:   unset.all = true          ignore what outer files set
-# pathrc: Values are strings, used as written. These lines are removed when
-# pathrc: you save.
+# pathrc: [common.enc] and the like hold env and var values encrypted with
+# pathrc: age, one line of base64 each. Values are strings, used as written.
+# pathrc: These lines are removed when you save.
 ";
 
 pub struct EditArgs<'a> {

@@ -1282,6 +1282,7 @@ version = "0.0.1"
 dependencies = [
  "age",
  "assert_cmd",
+ "base64",
  "clap",
  "ctrlc",
  "rust-embed",

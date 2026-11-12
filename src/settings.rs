@@ -2,7 +2,7 @@
 //! folded into the settings the shell should have, and the shell code that
 //! applies them.
 
-use crate::config::Layer;
+use crate::config::{Layer, Var};
 use crate::quote::quote;
 use crate::shell::Shell;
 use std::collections::BTreeMap;
@@ -12,7 +12,8 @@ use zeroize::{Zeroize, Zeroizing};
 /// The settings wanted in a directory. `None` is a name a file unset.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Wanted {
-    pub env: BTreeMap<String, Option<String>>,
+    /// Exported (`env`) and shell (`var`) variables.
+    pub vars: BTreeMap<String, Option<Var>>,
     pub alias: BTreeMap<String, Option<String>>,
     /// To put in front of `PATH`, in order.
     pub path: Vec<PathBuf>,
@@ -20,7 +21,10 @@ pub struct Wanted {
 
 impl Drop for Wanted {
     fn drop(&mut self) {
-        for value in self.env.values_mut().chain(self.alias.values_mut()) {
+        for var in self.vars.values_mut().flatten() {
+            var.value.zeroize();
+        }
+        for value in self.alias.values_mut() {
             value.zeroize();
         }
     }
@@ -28,19 +32,19 @@ impl Drop for Wanted {
 
 impl Wanted {
     /// Applies one layer on top: `unset.all`, then the named unsets, then
-    /// `env`, `path` and `alias`.
+    /// `env` and `var`, `path` and `alias`.
     pub fn apply(&mut self, layer: &Layer) {
         if layer.unset_all {
             *self = Wanted::default();
         }
-        for name in &layer.unset_env {
-            self.env.insert(name.clone(), None);
+        for name in &layer.unset_vars {
+            self.vars.insert(name.clone(), None);
         }
         for name in &layer.unset_alias {
             self.alias.insert(name.clone(), None);
         }
-        for (name, value) in &layer.env {
-            self.env.insert(name.clone(), Some(value.clone()));
+        for (name, var) in &layer.vars {
+            self.vars.insert(name.clone(), Some(var.clone()));
         }
         if !layer.path.is_empty() {
             // A deeper file's entries go in front of the outer ones.
@@ -54,14 +58,19 @@ impl Wanted {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.env.is_empty() && self.alias.is_empty() && self.path.is_empty()
+        self.vars.is_empty() && self.alias.is_empty() && self.path.is_empty()
     }
 
     /// Shell code applying these settings on top of the shell as it is.
     pub fn render(&self, shell: Shell) -> Zeroizing<String> {
         let mut out = Zeroizing::new(String::new());
         let fish = shell == Shell::Fish;
-        for name in self.env.iter().filter(|(_, v)| v.is_none()).map(|(n, _)| n) {
+        for name in self
+            .vars
+            .iter()
+            .filter(|(_, v)| v.is_none())
+            .map(|(n, _)| n)
+        {
             out.push_str(&if fish {
                 format!("set -e {name}\n")
             } else {
@@ -80,15 +89,17 @@ impl Wanted {
                 format!("unalias {name} 2>/dev/null\n")
             });
         }
-        for (name, value) in &self.env {
-            if let Some(value) = value {
-                let value = quote(value, shell);
-                out.push_str(&if fish {
-                    format!("set -gx {name} {value}\n")
-                } else {
-                    format!("export {name}={value}\n")
-                });
-            }
+        for (name, var) in &self.vars {
+            let Some(var) = var else { continue };
+            let value = quote(&var.value, shell);
+            out.push_str(&match (fish, var.exported) {
+                (true, true) => format!("set -gx {name} {value}\n"),
+                (false, true) => format!("export {name}={value}\n"),
+                // Unset first: assigning to a name that is already exported
+                // would keep it exported, and a var must not reach children.
+                (true, false) => format!("set -e {name}\nset -gu {name} {value}\n"),
+                (false, false) => format!("unset {name}\n{name}={value}\n"),
+            });
         }
         if !self.path.is_empty() {
             let dirs: Vec<String> = self
@@ -124,7 +135,11 @@ mod tests {
     use std::path::Path;
 
     fn layer(dir: &str, text: &str) -> Layer {
-        parse(text, Path::new(dir)).ok().unwrap().layer(Shell::Bash)
+        parse(text, Path::new(dir))
+            .ok()
+            .unwrap()
+            .layer(Shell::Bash, &mut |_| Err("no identity".to_string()))
+            .unwrap()
     }
 
     fn fold(layers: &[Layer]) -> Wanted {
@@ -147,9 +162,9 @@ mod tests {
                 "[common]\nenv.REGION = \"eu-west-1\"\nenv.ACCOUNT = \"1\"\n",
             ),
         ]);
-        assert_eq!(w.env["REGION"].as_deref(), Some("eu-west-1"));
-        assert_eq!(w.env["PROJECT"].as_deref(), Some("billing"));
-        assert_eq!(w.env["ACCOUNT"].as_deref(), Some("1"));
+        assert_eq!(w.vars["REGION"], Some(Var::env("eu-west-1")));
+        assert_eq!(w.vars["PROJECT"], Some(Var::env("billing")));
+        assert_eq!(w.vars["ACCOUNT"], Some(Var::env("1")));
     }
 
     #[test]
@@ -164,14 +179,14 @@ mod tests {
                 "[common]\nunset.env = [\"AWS_PROFILE\", \"OTHER\"]\nunset.alias = [\"k\"]\n",
             ),
         ]);
-        assert_eq!(w.env["AWS_PROFILE"], None);
-        assert_eq!(w.env["OTHER"], None);
+        assert_eq!(w.vars["AWS_PROFILE"], None);
+        assert_eq!(w.vars["OTHER"], None);
         assert_eq!(w.alias["k"], None);
         let w = fold(&[layer(
             "/p",
             "[common]\nunset.env = [\"X\"]\nenv.X = \"again\"\n",
         )]);
-        assert_eq!(w.env["X"].as_deref(), Some("again"));
+        assert_eq!(w.vars["X"], Some(Var::env("again")));
     }
 
     #[test]
@@ -184,7 +199,7 @@ mod tests {
             layer("/p/s", "[common]\nunset.all = true\nenv.B = \"2\"\n"),
         ]);
         let mut expected = Wanted::default();
-        expected.env.insert("B".into(), Some("2".into()));
+        expected.vars.insert("B".into(), Some(Var::env("2")));
         assert_eq!(w, expected);
     }
 
@@ -220,5 +235,18 @@ mod tests {
     fn nothing_wanted_renders_nothing() {
         assert!(Wanted::default().is_empty());
         assert_eq!(*Wanted::default().render(Shell::Zsh), "");
+    }
+
+    #[test]
+    fn a_var_is_unset_first_so_it_is_never_exported() {
+        let w = fold(&[layer("/p", "[common]\nvar.TOKEN = \"t\"\nenv.E = \"e\"\n")]);
+        assert_eq!(
+            *w.render(Shell::Bash),
+            "export E='e'\nunset TOKEN\nTOKEN='t'\n"
+        );
+        assert_eq!(
+            *w.render(Shell::Fish),
+            "set -gx E 'e'\nset -e TOKEN\nset -gu TOKEN 't'\n"
+        );
     }
 }
