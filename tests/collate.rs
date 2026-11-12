@@ -53,12 +53,21 @@ impl Env {
     }
 }
 
-/// Evaluates collate's output in bash with stand-in load functions, then
-/// runs `then`, returning its stdout.
+/// The bash hook's helper functions, from the init script itself, without
+/// its first collate.
+fn bash_helpers() -> String {
+    let script = include_str!("../init/pathrc.bash.cfg");
+    script
+        .lines()
+        .filter(|line| line.trim() != "__pathrc_collate")
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
+/// Evaluates collate's output in bash with the hook's helpers, then runs
+/// `then`, returning its stdout.
 fn eval_in_bash(collated: &str, then: &str) -> String {
-    let script = format!(
-        "__pathrc_load() {{ eval \"$3\"; }}; __pathrc_unload() {{ :; }}; eval \"$1\"; {then}"
-    );
+    let script = format!("{}\neval \"$1\"; {then}", bash_helpers());
     let output = std::process::Command::new("bash")
         .args(["-c", &script, "_", collated])
         .output()
@@ -235,16 +244,17 @@ fn collate_prints_nothing_while_the_files_in_scope_are_unchanged() {
         .output()
         .unwrap();
     let first = String::from_utf8(output.stdout).unwrap();
-    // The state the shell records is the quoted argument after the index.
-    let loaded = first
-        .split_once("__pathrc_load 0 '")
-        .and_then(|(_, rest)| rest.split_once("' '"))
-        .map(|(state, _)| state.to_string())
-        .expect("a load line");
-    assert_eq!(loaded.lines().count(), 3, "{loaded}");
+    // The state the shell keeps after evaluating it.
+    let loaded = eval_in_bash(&first, "printf %s \"$__pathrc_state\"");
+    assert_eq!(
+        loaded.lines().filter(|l| l.starts_with("level ")).count(),
+        3,
+        "{loaded}"
+    );
+    assert!(!loaded.contains("'1'"), "no values in the state: {loaded}");
     let again = env
         .pathrc(root.path(), &inner)
-        .env("PATHRC_LOADED", &loaded)
+        .env("PATHRC_STATE", &loaded)
         .arg("collate")
         .output()
         .unwrap();
@@ -275,4 +285,25 @@ fn old_format_files_are_not_read_but_are_listed() {
         )),
         "{listed}"
     );
+}
+
+#[test]
+fn an_older_hook_is_told_to_start_a_new_shell() {
+    let env = Env::new();
+    let (root, _, inner) = three_levels(&env);
+    let (stdout, stderr) = {
+        let output = env
+            .pathrc(root.path(), &inner)
+            .env("PATHRC_LOADED", "abc /old")
+            .arg("collate")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        (
+            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8(output.stderr).unwrap(),
+        )
+    };
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("start a new shell"), "{stderr}");
 }

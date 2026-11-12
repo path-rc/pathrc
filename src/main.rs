@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 pub mod allow;
+pub mod apply;
 pub mod collate;
 pub mod common;
 pub mod config;
@@ -22,7 +23,6 @@ pub mod shell;
 pub mod show;
 pub mod state;
 pub mod trust;
-pub mod undo;
 
 const AFTER_HELP: &str = "\
 Settings live in one .pathrc.toml file per directory, and optionally an
@@ -32,8 +32,8 @@ each with env.NAME (exported), var.NAME (not exported), alias.NAME,
 path.prepend and unset.env, unset.var, unset.alias and unset.all. Each table
 can have an .enc table ([common.enc] ...) of env and var values encrypted with
 age, one line of base64 each. A shell's table overrides [common], and a deeper
-directory's file overrides an outer one. In bash and zsh, leaving a directory
-undoes what its files set.
+directory's file overrides an outer one. Leaving a directory undoes what its
+files set, and puts back any value of yours they replaced.
 
 A file is only read once you have allowed it with `pathrc allow`, and again
 after every change to it.";
@@ -108,15 +108,6 @@ enum Commands {
     Allow(FilesArgs),
     /// Stops files being read (default: the .pathrc.toml and .pathrc.toml.age here)
     Deny(FilesArgs),
-    /// Used by the init scripts: reads two shell snapshots on stdin and
-    /// prints the code undoing the difference
-    #[command(name = "_undo", hide = true)]
-    Undo {
-        #[arg(value_parser = ["bash", "zsh"])]
-        shell: String,
-        /// The section marker prefix the snapshots use
-        mark: String,
-    },
 }
 
 #[derive(Copy, Clone, Debug, clap::ValueEnum)]
@@ -178,9 +169,5 @@ fn main() -> ExitCode {
         Commands::Rekey { files } => manage::handle_rekey(files),
         Commands::Allow(args) => handle_allow(&args.files),
         Commands::Deny(args) => handle_deny(&args.files),
-        Commands::Undo { shell, mark } => undo::handle_undo(
-            shell::Shell::from_name(shell).expect("clap allows only bash and zsh"),
-            mark,
-        ),
     }
 }

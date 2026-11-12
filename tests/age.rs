@@ -68,12 +68,21 @@ impl Env {
     }
 }
 
-/// Evaluates collate's output in bash with stand-in load functions, then
-/// runs `then`, returning its stdout.
+/// The bash hook's helper functions, from the init script itself, without
+/// its first collate.
+fn bash_helpers() -> String {
+    let script = include_str!("../init/pathrc.bash.cfg");
+    script
+        .lines()
+        .filter(|line| line.trim() != "__pathrc_collate")
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
+/// Evaluates collate's output in bash with the hook's helpers, then runs
+/// `then`, returning its stdout.
 fn eval_in_bash(collated: &str, then: &str) -> String {
-    let script = format!(
-        "__pathrc_load() {{ eval \"$3\"; }}; __pathrc_unload() {{ :; }}; eval \"$1\"; {then}"
-    );
+    let script = format!("{}\neval \"$1\"; {then}", bash_helpers());
     let output = std::process::Command::new("bash")
         .args(["-c", &script, "_", collated])
         .output()
@@ -397,7 +406,12 @@ fn a_wrong_identity_names_the_value_and_skips_the_file() {
         "{stderr}"
     );
     // A half-applied file would be confusing: none of it is applied.
-    assert!(output.stdout.is_empty());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        eval_in_bash(&stdout, "echo \"${PLAIN-none}|${SECRET-none}\""),
+        "none|none\n",
+        "{stdout}"
+    );
 }
 
 #[test]

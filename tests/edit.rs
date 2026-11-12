@@ -84,7 +84,12 @@ impl Env {
     /// What the cd hook would set for `cwd`, as `echo`ed by `then`.
     fn loaded(&self, cwd: &Path, then: &str) -> String {
         let collated = self.pathrc(cwd).arg("collate").output().unwrap();
-        let script = format!("__pathrc_load() {{ eval \"$3\"; }}; eval \"$1\"; {then}");
+        let helpers: String = include_str!("../init/pathrc.bash.cfg")
+            .lines()
+            .filter(|line| line.trim() != "__pathrc_collate")
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let script = format!("{helpers}\neval \"$1\"; {then}");
         let out = std::process::Command::new("bash")
             .args([
                 "-c",
