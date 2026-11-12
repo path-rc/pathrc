@@ -1,8 +1,14 @@
+<p align="center">
+  <a href="https://path-rc.com"><img src="docs/assets/img/readme-banner.png" alt="path-rc" width="720"></a>
+</p>
+
 # path-rc
 
 ## Logical project partitioning and more
 
-[path-rc.com](https://path-rc.com)
+[path-rc.com](https://path-rc.com) ·
+[Install](https://path-rc.com/#install) ·
+[Releases](https://github.com/path-rc/pathrc/releases)
 
 ### path-rc is a command line utility, `pathrc`, providing per path configurations for
 
@@ -22,19 +28,23 @@ Other `Bourne` shell derivates may also work if initialised as `Bash`.
 
 ### Installation
 
-Currently there are no automated releases.
+The latest release for Linux (x86-64, arm64) or macOS (Intel, Apple Silicon),
+checked against its SHA-256 checksum and installed to `/usr/local/bin`:
 
-Install Rust:(<https://rust-lang.org/tools/install/>)
+```shell
+curl -fsSL https://path-rc.com/install.sh | sh
+```
 
-From the repository root directory run:
+`PATHRC_VERSION=v0.3.0` picks a release, and
+`PATHRC_INSTALL_DIR=$HOME/.local/bin` installs somewhere you can write without
+sudo. The archives are also on the
+[releases page](https://github.com/path-rc/pathrc/releases).
 
-`cargo build --release`
+From source, with [Rust](https://rust-lang.org/tools/install/):
 
-Either copy the target/release/pathrc executable
-to your path or from the repository
-root run:
-
-`cargo install --path .`
+```shell
+cargo install --git https://github.com/path-rc/pathrc
+```
 
 ### Configuration
 

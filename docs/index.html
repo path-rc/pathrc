@@ -8,6 +8,22 @@
   <meta name="description"
     content="path-rc: per-directory environment variables, aliases and PATH for bash, zsh and fish, with secrets encrypted by age.">
   <meta name="theme-color" content="#0a0f1a">
+  <link rel="canonical" href="https://path-rc.com/">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="manifest" href="site.webmanifest">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://path-rc.com/">
+  <meta property="og:site_name" content="path-rc">
+  <meta property="og:title" content="path-rc: your shell, set up for the directory you're in">
+  <meta property="og:description"
+    content="Per-directory environment variables, aliases and PATH for bash, zsh and fish, with secrets encrypted by age.">
+  <meta property="og:image" content="https://path-rc.com/assets/img/social-preview.jpg">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="640">
+  <meta property="og:image:alt" content="The path-rc badge over a terminal turning an encrypted value into an environment variable">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="assets/css/style.css">
 </head>
 
@@ -15,13 +31,8 @@
   <a class="skip" href="#main">Skip to content</a>
 
   <header class="top">
-    <a class="brand" href="./" aria-label="path-rc home">
-      <svg class="mark" viewBox="0 0 48 48" aria-hidden="true">
-        <rect x="3" y="3" width="42" height="42" rx="11" />
-        <path d="M14 15l10 9-10 9" />
-        <path d="M27 34h9" />
-      </svg>
-      <span>path-rc</span>
+    <a class="brand" href="./">
+      <img src="assets/img/logo-header.webp" width="261" height="44" alt="path-rc home">
     </a>
     <nav aria-label="Main">
       <a href="#how">How it works</a>
@@ -96,6 +107,20 @@
             files in scope change.</p>
         </article>
       </div>
+    </section>
+
+    <section class="band secrets">
+      <div class="secrets-text">
+        <h2>Secrets stay secret until you need them</h2>
+        <p>Put credentials in a <code>.pathrc.toml.age</code> and commit it with the project. It's encrypted with
+          <a href="https://age-encryption.org">age</a> for everyone listed in the nearest
+          <code>.pathrc-recipients</code>, using their age or SSH public keys.</p>
+        <p>When you <code>cd</code> in, pathrc decrypts it in memory with your own key and sets the variables.
+          The plaintext never touches the disk, and leaving the directory unsets them again.</p>
+      </div>
+      <img class="secrets-art" src="assets/img/encrypted-to-env.webp" width="560" height="419" loading="lazy"
+        decoding="async"
+        alt="A terminal window: an encrypted value above an arrow, and below it the environment variable it becomes">
     </section>
 
     <section class="band example">
