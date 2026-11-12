@@ -113,24 +113,37 @@ pub fn candidates(files: &[ConfigFile], store: &Store) -> Vec<Candidate> {
     out
 }
 
-/// The settings a file contributes for `shell`, decrypting if needed.
+/// Decrypts with the identity, loading it on first use: a scope with no
+/// encrypted file or value never touches (or prompts for) it, and it is
+/// loaded at most once per run.
+fn decrypt_with(
+    identities: &mut Option<Result<Identities, String>>,
+    ciphertext: &[u8],
+) -> Result<crate::crypto::Plain, String> {
+    let identities = identities
+        .get_or_insert_with(Identities::load)
+        .as_ref()
+        .map_err(|e| format!("cannot decrypt: {e}"))?;
+    identities
+        .decrypt(ciphertext)
+        .map_err(|e| format!("cannot decrypt: {e}"))
+}
+
+/// The settings a file contributes for `shell`, decrypting the file or its
+/// `.enc` values if needed.
 pub fn layer_for(
     candidate: &Candidate,
     shell: Shell,
     identities: &mut Option<Result<Identities, String>>,
 ) -> Result<Layer, String> {
+    let debug = std::env::var_os("PATHRC_DEBUG").is_some();
+    let path = candidate.file.path.display();
     let plain;
     let bytes: &[u8] = if candidate.file.encrypted {
-        if std::env::var_os("PATHRC_DEBUG").is_some() {
-            eprintln!("pathrc: decrypting {}", candidate.file.path.display());
+        if debug {
+            eprintln!("pathrc: decrypting {path}");
         }
-        let identities = identities
-            .get_or_insert_with(Identities::load)
-            .as_ref()
-            .map_err(|e| format!("cannot decrypt: {e}"))?;
-        plain = identities
-            .decrypt(&candidate.bytes)
-            .map_err(|e| format!("cannot decrypt: {e}"))?;
+        plain = decrypt_with(identities, &candidate.bytes)?;
         &plain
     } else {
         &candidate.bytes
@@ -142,7 +155,12 @@ pub fn layer_for(
         .parent()
         .unwrap_or(std::path::Path::new("/"));
     let config = parse(text, dir).map_err(|problems| describe(&problems))?;
-    Ok(config.layer(shell))
+    config.layer(shell, &mut |ciphertext| {
+        if debug {
+            eprintln!("pathrc: decrypting a value in {path}");
+        }
+        decrypt_with(identities, ciphertext)
+    })
 }
 
 /// Unloads the file at `index`, leaving `state` loaded.

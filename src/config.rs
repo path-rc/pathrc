@@ -1,19 +1,27 @@
-//! The `.pathrc.toml` format (RFC 0002): settings, not shell code.
+//! The `.pathrc.toml` format (RFC 0002, with RFC 0003's `var` and `.enc`):
+//! settings, not shell code.
 //!
 //! ```toml
 //! [common]                      # every shell
-//! env.AWS_REGION = "eu-west-2"
+//! env.AWS_REGION = "eu-west-2"  # exported
+//! var.STAGE = "dev"             # a shell variable, not exported
 //! path.prepend = ["bin"]        # relative to this file's directory
 //! alias.tfp = "terraform plan"
+//!
+//! [common.enc]                  # secrets: one line of base64 age each
+//! env.AWS_ACCOUNT_ID = "YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+…"
 //!
 //! [sh]                          # bash and zsh; then [bash], [zsh], [fish]
 //! unset.env = ["AWS_PROFILE"]
 //! ```
 //!
-//! A file is parsed and checked once, then [`Config::layer`] merges the
-//! tables a shell reads into the settings that file contributes.
+//! A file is parsed and checked once, without decrypting anything; then
+//! [`Config::layer`] merges the tables a shell reads, each followed by its
+//! `.enc`, into the settings that file contributes.
 
+use crate::crypto::Plain;
 use crate::shell::Shell;
+use base64::Engine;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -43,10 +51,24 @@ struct Table {
     #[serde(default)]
     env: BTreeMap<Text, Text>,
     #[serde(default)]
+    var: BTreeMap<Text, Text>,
+    #[serde(default)]
     alias: BTreeMap<Text, Text>,
     path: Option<PathTable>,
     #[serde(default)]
     unset: Unset,
+    enc: Option<Enc>,
+}
+
+/// `[common.enc]` and the like: `env` and `var` only, each value an age
+/// message as one line of base64.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct Enc {
+    #[serde(default)]
+    env: BTreeMap<Text, Text>,
+    #[serde(default)]
+    var: BTreeMap<Text, Text>,
 }
 
 #[derive(Deserialize)]
@@ -61,15 +83,21 @@ struct Unset {
     #[serde(default)]
     env: Vec<Text>,
     #[serde(default)]
+    var: Vec<Text>,
+    #[serde(default)]
     alias: Vec<Text>,
     #[serde(default)]
     all: bool,
 }
 
 impl Drop for Table {
-    // Values may be secrets from a decrypted file.
+    // Values may be secrets from a decrypted .pathrc.toml.age.
     fn drop(&mut self) {
-        for value in self.env.values_mut().chain(self.alias.values_mut()) {
+        let values = self.env.values_mut();
+        for value in values
+            .chain(self.var.values_mut())
+            .chain(self.alias.values_mut())
+        {
             value.as_mut().zeroize();
         }
     }
@@ -81,14 +109,38 @@ pub struct Config {
     dir: PathBuf,
 }
 
+/// A variable a file sets: exported (`env`) or a shell variable (`var`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Var {
+    pub value: String,
+    pub exported: bool,
+}
+
+impl Var {
+    pub fn env(value: &str) -> Var {
+        Var {
+            value: value.to_string(),
+            exported: true,
+        }
+    }
+
+    pub fn shell(value: &str) -> Var {
+        Var {
+            value: value.to_string(),
+            exported: false,
+        }
+    }
+}
+
 /// What one file contributes for one shell: its tables merged, a later
-/// table's key overriding an earlier one's.
+/// table's key overriding an earlier one's, whether `env` or `var`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Layer {
     pub unset_all: bool,
-    pub unset_env: BTreeSet<String>,
+    /// From `unset.env` and `unset.var`: either way the name goes.
+    pub unset_vars: BTreeSet<String>,
     pub unset_alias: BTreeSet<String>,
-    pub env: BTreeMap<String, String>,
+    pub vars: BTreeMap<String, Var>,
     /// Absolute: relative entries are resolved against the file's directory.
     pub path: Vec<PathBuf>,
     pub alias: BTreeMap<String, String>,
@@ -96,32 +148,69 @@ pub struct Layer {
 
 impl Drop for Layer {
     fn drop(&mut self) {
-        for value in self.env.values_mut().chain(self.alias.values_mut()) {
+        for var in self.vars.values_mut() {
+            var.value.zeroize();
+        }
+        for value in self.alias.values_mut() {
             value.zeroize();
         }
     }
 }
 
+/// What a decrypted `.enc` value turned out not to be.
+fn decrypted_text(plain: Plain) -> Result<String, String> {
+    let text = String::from_utf8(plain.to_vec()).map_err(|_| "decrypted, but not UTF-8 text")?;
+    if text.contains('\0') {
+        let mut text = text;
+        text.zeroize();
+        return Err("decrypted, but contains a NUL character".to_string());
+    }
+    Ok(text)
+}
+
 impl Config {
-    /// The tables `shell` reads, in order: `[common]`, then `[sh]` for bash,
-    /// zsh and sh, then the shell's own.
-    fn tables(&self, shell: Shell) -> Vec<&Table> {
+    /// The tables `shell` reads, in order, with their names: `[common]`,
+    /// then `[sh]` for bash, zsh and sh, then the shell's own.
+    fn tables(&self, shell: Shell) -> Vec<(&'static str, &Table)> {
         let d = &self.document;
+        let (common, sh) = (("common", &d.common), ("sh", &d.sh));
         match shell {
-            Shell::Sh => vec![&d.common, &d.sh],
-            Shell::Bash => vec![&d.common, &d.sh, &d.bash],
-            Shell::Zsh => vec![&d.common, &d.sh, &d.zsh],
-            Shell::Fish => vec![&d.common, &d.fish],
+            Shell::Sh => vec![common, sh],
+            Shell::Bash => vec![common, sh, ("bash", &d.bash)],
+            Shell::Zsh => vec![common, sh, ("zsh", &d.zsh)],
+            Shell::Fish => vec![common, ("fish", &d.fish)],
         }
     }
 
-    pub fn layer(&self, shell: Shell) -> Layer {
+    /// How many encrypted values the file holds, in every table.
+    pub fn encrypted(&self) -> usize {
+        let d = &self.document;
+        [&d.common, &d.sh, &d.bash, &d.zsh, &d.fish]
+            .iter()
+            .filter_map(|t| t.enc.as_ref())
+            .map(|e| e.env.len() + e.var.len())
+            .sum()
+    }
+
+    /// The file's settings for `shell`. Each table is followed by its
+    /// `.enc`, whose values `decrypt` turns from age messages into text, so
+    /// a secret overrides a plain default of the same name.
+    pub fn layer(
+        &self,
+        shell: Shell,
+        decrypt: &mut dyn FnMut(&[u8]) -> Result<Plain, String>,
+    ) -> Result<Layer, String> {
         let mut layer = Layer::default();
-        for table in self.tables(shell) {
+        for (table_name, table) in self.tables(shell) {
             for (name, value) in &table.env {
                 layer
-                    .env
-                    .insert(name.get_ref().clone(), value.get_ref().clone());
+                    .vars
+                    .insert(name.get_ref().clone(), Var::env(value.get_ref()));
+            }
+            for (name, value) in &table.var {
+                layer
+                    .vars
+                    .insert(name.get_ref().clone(), Var::shell(value.get_ref()));
             }
             for (name, value) in &table.alias {
                 layer
@@ -136,15 +225,42 @@ impl Config {
                     .map(|dir| resolve(&self.dir, dir.get_ref()))
                     .collect();
             }
-            layer
-                .unset_env
-                .extend(table.unset.env.iter().map(|n| n.get_ref().clone()));
+            let unset = &table.unset;
+            layer.unset_vars.extend(
+                unset
+                    .env
+                    .iter()
+                    .chain(&unset.var)
+                    .map(|n| n.get_ref().clone()),
+            );
             layer
                 .unset_alias
-                .extend(table.unset.alias.iter().map(|n| n.get_ref().clone()));
-            layer.unset_all |= table.unset.all;
+                .extend(unset.alias.iter().map(|n| n.get_ref().clone()));
+            layer.unset_all |= unset.all;
+
+            let Some(enc) = &table.enc else { continue };
+            let entries = enc.env.iter().map(|e| (e, "env", true));
+            for ((name, cipher), key, exported) in
+                entries.chain(enc.var.iter().map(|e| (e, "var", false)))
+            {
+                let what = format!("[{table_name}.enc] {key}.{}", name.get_ref());
+                // Checked when parsed, so this decodes.
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(cipher.get_ref())
+                    .map_err(|e| format!("{what}: {e}"))?;
+                let text = decrypt(&bytes)
+                    .and_then(decrypted_text)
+                    .map_err(|e| format!("{what}: {e}"))?;
+                layer.vars.insert(
+                    name.get_ref().clone(),
+                    Var {
+                        value: text,
+                        exported,
+                    },
+                );
+            }
         }
-        layer
+        Ok(layer)
     }
 }
 
@@ -242,10 +358,59 @@ impl Checker<'_> {
         }
     }
 
+    /// One line of base64 that decodes to an age message.
+    fn age_value(&mut self, value: &Text) {
+        let decoded = base64::engine::general_purpose::STANDARD.decode(value.get_ref());
+        if !decoded.is_ok_and(|bytes| bytes.starts_with(b"age-encryption.org/v1\n")) {
+            self.at(
+                value.span().start,
+                "not an encrypted value: expected one line of base64 age, \
+                 e.g. from `printf %s VALUE | age -r RECIPIENT | base64`"
+                    .to_string(),
+            );
+        }
+    }
+
+    /// A name set by both `env` and `var` in the same table (plain or
+    /// `.enc`), which would leave its kind to chance.
+    fn both(&mut self, env: &BTreeMap<Text, Text>, var: &BTreeMap<Text, Text>) {
+        for name in var
+            .keys()
+            .filter(|n| env.contains_key(n.get_ref().as_str()))
+        {
+            self.at(
+                name.span().start,
+                format!(
+                    "'{}' is set by both env and var here; it is either exported or not",
+                    name.get_ref()
+                ),
+            );
+        }
+    }
+
     fn table(&mut self, table: &Table) {
         for (name, value) in &table.env {
             self.env_name(name, "env.");
             self.no_nul(value);
+        }
+        for (name, value) in &table.var {
+            self.env_name(name, "var.");
+            self.no_nul(value);
+        }
+        self.both(&table.env, &table.var);
+        for name in &table.unset.var {
+            self.env_name(name, "unsetting");
+        }
+        if let Some(enc) = &table.enc {
+            for (name, value) in &enc.env {
+                self.env_name(name, "env.");
+                self.age_value(value);
+            }
+            for (name, value) in &enc.var {
+                self.env_name(name, "var.");
+                self.age_value(value);
+            }
+            self.both(&enc.env, &enc.var);
         }
         for (name, value) in &table.alias {
             self.alias_name(name);
@@ -366,13 +531,21 @@ unset.all = true
         parse(text, Path::new("/proj"))
             .map_err(|p| describe(&p))
             .unwrap()
-            .layer(shell)
+            .layer(shell, &mut |_| Err("no identity in this test".to_string()))
+            .unwrap()
     }
 
     fn strings(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn envs(pairs: &[(&str, &str)]) -> BTreeMap<String, Var> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), Var::env(v)))
             .collect()
     }
 
@@ -383,13 +556,13 @@ unset.all = true
     #[test]
     fn bash_reads_common_sh_and_bash_with_later_keys_winning() {
         let l = layer(FILE, Shell::Bash);
-        assert_eq!(l.env, strings(&[("A", "bash"), ("B", "sh")]));
+        assert_eq!(l.vars, envs(&[("A", "bash"), ("B", "sh")]));
         assert_eq!(l.alias, strings(&[("ll", "ls -l")]));
         assert_eq!(
             l.path,
             vec![PathBuf::from("/proj/bin"), PathBuf::from("/opt/tool/bin")]
         );
-        assert_eq!(l.unset_env, set(&["GONE"]));
+        assert_eq!(l.unset_vars, set(&["GONE"]));
         assert_eq!(l.unset_alias, set(&["old"]));
         assert!(!l.unset_all);
     }
@@ -397,14 +570,14 @@ unset.all = true
     #[test]
     fn zsh_reads_sh_and_its_own_path_list_replaces_commons() {
         let l = layer(FILE, Shell::Zsh);
-        assert_eq!(l.env, strings(&[("A", "common"), ("B", "sh")]));
+        assert_eq!(l.vars, envs(&[("A", "common"), ("B", "sh")]));
         assert_eq!(l.path, vec![PathBuf::from("/proj/zbin")]);
     }
 
     #[test]
     fn fish_skips_sh() {
         let l = layer(FILE, Shell::Fish);
-        assert_eq!(l.env, strings(&[("A", "common"), ("B", "common")]));
+        assert_eq!(l.vars, envs(&[("A", "common"), ("B", "common")]));
         assert_eq!(l.alias, strings(&[("ll", "ls -lh")]));
         assert!(l.unset_alias.is_empty());
         assert!(l.unset_all);
@@ -413,7 +586,7 @@ unset.all = true
     #[test]
     fn shared_sh_reads_common_and_sh() {
         let l = layer(FILE, Shell::Sh);
-        assert_eq!(l.env, strings(&[("A", "common"), ("B", "sh")]));
+        assert_eq!(l.vars, envs(&[("A", "common"), ("B", "sh")]));
     }
 
     #[test]
@@ -425,7 +598,7 @@ unset.all = true
     #[test]
     fn values_are_not_expanded() {
         let l = layer("[common]\nenv.X = \"$HOME/x\"\n", Shell::Bash);
-        assert_eq!(l.env["X"], "$HOME/x");
+        assert_eq!(l.vars["X"], Var::env("$HOME/x"));
     }
 
     fn problems(text: &str) -> Vec<String> {
@@ -488,5 +661,105 @@ unset.all = true
     #[test]
     fn a_valid_file_has_no_problems() {
         assert_eq!(problems(FILE), Vec::<String>::new());
+    }
+
+    /// A stand-in age message: the real header, then the "plaintext", so a
+    /// test decrypt can return it without keys.
+    fn fake_age(plain: &str) -> String {
+        let bytes = format!("age-encryption.org/v1\n{plain}");
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    fn fake_decrypt(bytes: &[u8]) -> Result<Plain, String> {
+        let text = std::str::from_utf8(bytes).unwrap();
+        let plain = text.strip_prefix("age-encryption.org/v1\n").unwrap();
+        Ok(zeroize::Zeroizing::new(plain.as_bytes().to_vec()))
+    }
+
+    fn layer_with_secrets(text: &str, shell: Shell) -> Result<Layer, String> {
+        parse(text, Path::new("/proj"))
+            .map_err(|p| describe(&p))?
+            .layer(shell, &mut fake_decrypt)
+    }
+
+    #[test]
+    fn var_is_a_shell_variable_and_overrides_like_env() {
+        let l = layer(
+            "[common]\nenv.A = \"exported\"\nvar.B = \"shell\"\n[bash]\nvar.A = \"now a var\"\n",
+            Shell::Bash,
+        );
+        assert_eq!(l.vars["A"], Var::shell("now a var"));
+        assert_eq!(l.vars["B"], Var::shell("shell"));
+        let l = layer(
+            "[common]\nunset.var = [\"B\"]\nunset.env = [\"A\"]\n",
+            Shell::Zsh,
+        );
+        assert_eq!(l.unset_vars, set(&["A", "B"]));
+    }
+
+    #[test]
+    fn enc_follows_its_table_and_overrides_a_plain_default() {
+        let text = format!(
+            "[common]\nenv.REGION = \"plain\"\nenv.KEEP = \"plain\"\n\
+             [common.enc]\nenv.REGION = \"{}\"\nvar.TOKEN = \"{}\"\n\
+             [bash]\nenv.TOKEN = \"bash plain wins over common.enc\"\n\
+             [zsh.enc]\nenv.KEEP = \"{}\"\n",
+            fake_age("secret-region"),
+            fake_age("s3cret"),
+            fake_age("zsh secret"),
+        );
+        let bash = layer_with_secrets(&text, Shell::Bash).unwrap();
+        assert_eq!(bash.vars["REGION"], Var::env("secret-region"));
+        assert_eq!(bash.vars["KEEP"], Var::env("plain"));
+        assert_eq!(
+            bash.vars["TOKEN"],
+            Var::env("bash plain wins over common.enc")
+        );
+        let zsh = layer_with_secrets(&text, Shell::Zsh).unwrap();
+        assert_eq!(zsh.vars["TOKEN"], Var::shell("s3cret"));
+        assert_eq!(zsh.vars["KEEP"], Var::env("zsh secret"));
+        assert_eq!(parse(&text, Path::new("/")).ok().unwrap().encrypted(), 3);
+    }
+
+    #[test]
+    fn a_decrypt_failure_names_the_value() {
+        let text = format!("[sh.enc]\nvar.TOKEN = \"{}\"\n", fake_age("x"));
+        let error = parse(&text, Path::new("/"))
+            .ok()
+            .unwrap()
+            .layer(Shell::Bash, &mut |_| Err("no identity".to_string()))
+            .unwrap_err();
+        assert_eq!(error, "[sh.enc] var.TOKEN: no identity");
+        // Shells that don't read [sh] don't decrypt it.
+        assert!(layer_with_secrets(&text, Shell::Fish).is_ok());
+    }
+
+    #[test]
+    fn enc_holds_only_env_and_var_and_only_age_values() {
+        let p = problems("[common.enc]\nalias.x = \"y\"\n");
+        assert!(
+            p[0].starts_with("line 2") && p[0].contains("alias"),
+            "{p:?}"
+        );
+        let p = problems("[common.enc]\nenv.X = \"plain text\"\n");
+        assert!(
+            p[0].starts_with("line 2, column 9: not an encrypted value"),
+            "{p:?}"
+        );
+        let not_age = base64::engine::general_purpose::STANDARD.encode("hello");
+        assert_eq!(
+            problems(&format!("[common.enc]\nenv.X = \"{not_age}\"\n")).len(),
+            1
+        );
+        assert!(problems(&format!("[common.enc]\nenv.X = \"{}\"\n", fake_age("ok"))).is_empty());
+    }
+
+    #[test]
+    fn a_name_set_by_both_env_and_var_in_one_table_is_an_error() {
+        let p = problems("[common]\nenv.A = \"1\"\nvar.A = \"2\"\n");
+        assert_eq!(p.len(), 1);
+        assert!(p[0].contains("both env and var"), "{p:?}");
+        // In different tables it's an ordinary override.
+        assert!(problems("[common]\nenv.A = \"1\"\n[sh]\nvar.A = \"2\"\n").is_empty());
     }
 }

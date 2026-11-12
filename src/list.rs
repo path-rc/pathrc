@@ -1,6 +1,5 @@
 use crate::common::current_dir;
-use crate::config::describe;
-use crate::config::validate;
+use crate::config::{describe, parse, validate};
 use crate::files::{dirs, in_dir, old_in_dir, start_dir, PLAIN};
 use crate::shell::Shell;
 use crate::trust::{Store, Trust};
@@ -39,13 +38,21 @@ pub fn handle_list() -> ExitCode {
                     Trust::Changed => marks.push("changed".to_string()),
                 }
                 // An encrypted file's structure can't be seen without decrypting it.
-                let problems = if file.encrypted {
-                    Vec::new()
-                } else {
-                    validate(&bytes)
-                };
-                if !problems.is_empty() {
-                    marks.push(format!("invalid: {}", describe(&problems)));
+                // A .pathrc.toml.age can't be seen into without decrypting.
+                if !file.encrypted {
+                    let dir = file.path.parent().unwrap_or(std::path::Path::new("/"));
+                    let parsed = match std::str::from_utf8(&bytes) {
+                        Ok(text) => parse(text, dir),
+                        Err(_) => Err(validate(&bytes)),
+                    };
+                    match parsed {
+                        Ok(config) => match config.encrypted() {
+                            0 => {}
+                            1 => marks.push("1 encrypted value".to_string()),
+                            n => marks.push(format!("{n} encrypted values")),
+                        },
+                        Err(problems) => marks.push(format!("invalid: {}", describe(&problems))),
+                    }
                 }
             }
         }
