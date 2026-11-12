@@ -7,7 +7,7 @@ code you did not mean to run.
 ## Reporting a vulnerability
 
 Report it privately through
-[GitHub's private vulnerability reporting](https://github.com/pathrc/pathrc/security/advisories/new),
+[GitHub's private vulnerability reporting](https://github.com/path-rc/pathrc/security/advisories/new),
 not in a public issue or pull request. Include the pathrc version
 (`pathrc --version`), your shell and OS, and the steps to reproduce it.
 
