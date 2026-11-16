@@ -44,6 +44,10 @@ with [Rust](https://rust-lang.org/tools/install/):
 cargo install --git https://github.com/path-rc/pathrc
 ```
 
+A build like this reports the commit it was built from as its version
+(`pathrc unknown, commit abc1234`), since Cargo's checkout has no tags; a
+build in a clone reports the nearest release tag, such as `0.8.0-2-gabc1234`.
+
 Then hook it into your shell's rc file:
 
 ```shell
