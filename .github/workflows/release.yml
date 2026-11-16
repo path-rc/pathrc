@@ -90,14 +90,11 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Stamp the version from the tag
-        # Cargo.toml's version is not bumped in commits; the tag is the version.
-        run: |
-          perl -pi -e 'if (!$done && s/^version = "[^"]*"/version = "$ENV{VERSION}"/) { $done = 1 }' Cargo.toml
-          grep -m1 '^version = ' Cargo.toml
-          cargo update --workspace
-
       - name: Build
+        # Cargo.toml's version is not bumped in commits; the tag is the
+        # version, and build.rs reports it from PATHRC_RELEASE_VERSION.
+        env:
+          PATHRC_RELEASE_VERSION: ${{ env.VERSION }}
         run: cargo build --release --locked --target "${{ matrix.target }}"
 
       - name: Test the binary

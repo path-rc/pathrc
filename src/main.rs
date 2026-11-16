@@ -43,7 +43,7 @@ A file is only read once you have allowed it with `pathrc allow`, and again
 after every change to it.";
 
 #[derive(Parser, Debug)]
-#[command(version, author, about, long_about, after_help = AFTER_HELP)]
+#[command(version = env!("PATHRC_BUILD_VERSION"), author, about, long_about, after_help = AFTER_HELP)]
 #[command(propagate_version = true)]
 struct Cli {
     #[command(subcommand)]
