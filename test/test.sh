@@ -116,6 +116,45 @@ echo 'not read' > "$tree/old/.pathrc.toml.age"
 check "list marks an old .pathrc.toml.age" "1" \
   "$(cd "$tree/old" && PATHRC_SHELL=bash PATHRC_START=$tree pathrc list | grep -c 'pathrc.toml.age  \[old format: pathrc migrate\]')"
 
+# Double-quoted values expand $NAME; single-quoted ones don't; nothing else
+# in a value can reach the shell.
+xp=$scratch/expand
+mkdir -p "$xp/in"
+cat > "$xp/in/.pathrc.toml" <<'TOML'
+[common]
+env.EXP = "$HOME/x"
+env.LIT = '$HOME/x'
+env.TRICKY = "a\"b`c`\\d $$e ${HOME}"
+env.APPEND = "$APPEND:more"
+var.SV = "${SV}-local"
+env.UNSET_REF = "[${PATHRC_SURELY_UNSET}]"
+path.prepend = ["$HOME/hbin"]
+TOML
+(cd "$xp/in" && pathrc allow > /dev/null)
+xshow='printf "%s\n" "$EXP" "$LIT" "$TRICKY" "$APPEND" "$SV" "$(sh -c "echo \${SV-unexported}")" "$UNSET_REF" "${PATH%%:*}"'
+xexpected="$HOME/x
+\$HOME/x
+a\"b\`c\`\\d \$e $HOME
+orig:more
+sv-local
+unexported
+[]
+$HOME/hbin
+orig|sv|sv"
+for sh in bash zsh; do
+  command -v "$sh" > /dev/null || continue
+  strict=; [[ $sh == bash ]] && strict='set -u;'
+  check "$sh: \$NAME expands only in double quotes, and nothing else gets through" "$xexpected" \
+    "$(cd "$xp" && APPEND=orig SV=sv "$sh" -c "$strict eval \"\$(pathrc init $sh)\"; cd in; $xshow; cd ..
+      echo \"\$APPEND|\$SV|\$(sh -c 'echo \${SV-unexported}')\"" 2>&1)"
+done
+if command -v fish > /dev/null; then
+  check "fish: \$NAME expands only in double quotes, and nothing else gets through" "$xexpected" \
+    "$(cd "$xp" && APPEND=orig SV=sv fish --no-config -c 'pathrc init fish | source; cd in
+      printf "%s\n" "$EXP" "$LIT" "$TRICKY" "$APPEND" "$SV" (sh -c "echo \${SV-unexported}") "$UNSET_REF" "$PATH[1]"; cd ..
+      echo "$APPEND|$SV|"(sh -c "echo \${SV-unexported}")' 2>&1)"
+fi
+
 # pathrc migrate turns an old .pathrc into a .pathrc.toml that applies.
 mig=$scratch/migrate
 mkdir -p "$mig"

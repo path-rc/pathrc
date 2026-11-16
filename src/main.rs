@@ -13,6 +13,7 @@ pub mod common;
 pub mod config;
 pub mod crypto;
 pub mod edit;
+pub mod expand;
 pub mod files;
 pub mod init;
 pub mod list;
@@ -32,9 +33,11 @@ every shell, [sh] to bash and zsh, and [bash], [zsh] and [fish] to one shell,
 each with env.NAME (exported), var.NAME (not exported), alias.NAME,
 path.prepend and unset.env, unset.var, unset.alias and unset.all. Each table
 can have an .enc table ([common.enc] ...) of env and var values encrypted with
-age, one line of base64 each. A shell's table overrides [common], and a deeper
-directory's file overrides an outer one. Leaving a directory undoes what its
-files set, and puts back any value of yours they replaced.
+age, one line of base64 each. Values in double quotes expand $NAME and
+${NAME}; single-quoted values and .enc values are used exactly as written. A
+shell's table overrides [common], and a deeper directory's file overrides an
+outer one. Leaving a directory undoes what its files set, and puts back any
+value of yours they replaced.
 
 A file is only read once you have allowed it with `pathrc allow`, and again
 after every change to it.";

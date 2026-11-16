@@ -123,8 +123,18 @@ Each table can have:
 
 and an [`.enc` table](#secrets) of encrypted `env` and `var` values.
 
-- **Values are strings, used exactly as written.** `"$HOME/bin"` is not
-  expanded, and a number such as an account ID must be quoted.
+- **Values are strings, and the quotes choose, as in a shell.** In double
+  quotes, `$NAME` and `${NAME}` expand: `env.CACHE = "$HOME/.cache/x"`. In
+  single quotes, a value is used exactly as written: `env.PRICE = '$5'`.
+  `$$` is a literal `$` in double quotes; any other `$` there (`$(…)`,
+  `$1`) is an error. A number such as an account ID must be quoted.
+- **What a value can refer to:** your environment, variables set by outer
+  directories' files, and its own previous value
+  (`env.JAVA_OPTS = "$JAVA_OPTS -Xmx2g"`), but not another name the same
+  file sets. An unset variable expands to nothing. `path.prepend` entries
+  expand too (`"$HOME/bin"`), from exported variables and outer files.
+- **Secrets are never expanded.** `.enc` values are used exactly as written,
+  whatever their quotes, so a password containing `$` stays intact.
 - **Later wins.** A key in a shell's table overrides the same key in
   `[common]`, a table's `.enc` overrides the table, and a deeper directory's
   file overrides an outer one. Within a file, `unset` applies first, then

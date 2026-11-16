@@ -55,11 +55,10 @@ pub fn handle_collate() {
     let mut stack: Vec<Level> = loaded[..keep].to_vec();
     let mut identities: Option<Result<Identities, String>> = None;
     for candidate in &candidates[keep..] {
-        match layer_for(candidate, shell, &mut identities) {
-            Ok(layer) => {
-                let level = emitter.enter(stack.len(), &candidate.entry, &layer, &stack);
-                stack.push(level);
-            }
+        let entered = layer_for(candidate, shell, &mut identities)
+            .and_then(|layer| emitter.enter(stack.len(), &candidate.entry, &layer, &stack));
+        match entered {
+            Ok(level) => stack.push(level),
             Err(error) => eprintln!("pathrc: {}: {error}", candidate.file.path.display()),
         }
     }

@@ -2,11 +2,11 @@
 //! folded into the settings the shell should have, and the shell code that
 //! applies them.
 
-use crate::config::{Layer, Var};
+use crate::config::{Layer, PathEntry, Var};
+use crate::expand;
 use crate::quote::quote;
 use crate::shell::Shell;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use zeroize::{Zeroize, Zeroizing};
 
 /// The settings wanted in a directory. `None` is a name a file unset.
@@ -16,7 +16,7 @@ pub struct Wanted {
     pub vars: BTreeMap<String, Option<Var>>,
     pub alias: BTreeMap<String, Option<String>>,
     /// To put in front of `PATH`, in order.
-    pub path: Vec<PathBuf>,
+    pub path: Vec<PathEntry>,
 }
 
 impl Drop for Wanted {
@@ -86,16 +86,16 @@ impl Wanted {
             }
         }
         if !self.path.is_empty() {
-            let dirs: Vec<String> = self
+            // Each entry a word of its own, expanding its references.
+            let words: Vec<String> = self
                 .path
                 .iter()
-                .map(|dir| dir.to_string_lossy().into_owned())
+                .map(|e| value_word(&e.text, e.expand, shell))
                 .collect();
             out.push_str(&if shell == Shell::Fish {
-                let words: Vec<String> = dirs.iter().map(|d| quote(d, shell)).collect();
                 format!("set -gx PATH {} $PATH\n", words.join(" "))
             } else {
-                format!("export PATH={}:\"$PATH\"\n", quote(&dirs.join(":"), shell))
+                format!("export PATH={}:\"$PATH\"\n", words.join(":"))
             });
         }
         for (name, value) in &self.alias {
@@ -111,15 +111,38 @@ impl Wanted {
 /// unset first: assigning to a name that is already exported would keep it
 /// exported, and a `var` must not reach child programs.
 pub fn set_var(name: &str, var: &Var, shell: Shell) -> String {
-    let value = quote(&var.value, shell);
-    match (shell, var.exported) {
-        (Shell::Fish, true) => format!("set -gx {name} {value}\n"),
-        (Shell::Fish, false) => format!("set -e {name}\nset -gu {name} {value}\n"),
-        (_, true) => format!("export {name}={value}\n"),
+    let value = value_word(&var.value, var.expand, shell);
+    match (shell, var.exported, var.expand) {
+        (Shell::Fish, true, _) => format!("set -gx {name} {value}\n"),
+        (_, true, _) => format!("export {name}={value}\n"),
+        // An expanding var may refer to its own previous value, which the
+        // unset below would lose: work it out first.
+        (Shell::Fish, false, true) => {
+            format!("set -l __pathrc_v {value}\nset -e {name}\nset -gu {name} \"$__pathrc_v\"\n")
+        }
+        (Shell::Fish, false, false) => format!("set -e {name}\nset -gu {name} {value}\n"),
         // typeset -g: plain assignment in a function warns under zsh's
         // WARN_CREATE_GLOBAL.
-        (Shell::Zsh, false) => format!("unset {name}\ntypeset -g {name}={value}\n"),
-        (_, false) => format!("unset {name}\n{name}={value}\n"),
+        // Not `local`: `pathrc show`'s output may run outside a function.
+        (Shell::Zsh, false, true) => format!(
+            "typeset -g __pathrc_v={value}\nunset {name}\n\
+             typeset -g {name}=\"$__pathrc_v\"\nunset __pathrc_v\n"
+        ),
+        (Shell::Zsh, false, false) => format!("unset {name}\ntypeset -g {name}={value}\n"),
+        (_, false, true) => {
+            format!("__pathrc_v={value}\nunset {name}\n{name}=\"$__pathrc_v\"\nunset __pathrc_v\n")
+        }
+        (_, false, false) => format!("unset {name}\n{name}={value}\n"),
+    }
+}
+
+/// A value as one shell word: expanding its `$NAME` references when it
+/// came from a double-quoted string with a `$`, else exactly as written.
+pub fn value_word(value: &str, expand: bool, shell: Shell) -> String {
+    match expand.then(|| expand::parse(value)) {
+        Some(Ok(parts)) => expand::render(&parts, shell),
+        // Checked when the file was parsed; never seen, but stay literal.
+        _ => quote(value, shell),
     }
 }
 
@@ -226,7 +249,7 @@ mod tests {
             layer("/p", "[common]\npath.prepend = [\"bin\"]\n"),
             layer("/p/s", "[common]\npath.prepend = [\"bin\", \"/opt/x\"]\n"),
         ]);
-        let p: Vec<_> = w.path.iter().map(|p| p.to_str().unwrap()).collect();
+        let p: Vec<_> = w.path.iter().map(|p| p.text.as_str()).collect();
         assert_eq!(p, ["/p/s/bin", "/opt/x", "/p/bin"]);
     }
 
@@ -264,6 +287,24 @@ mod tests {
         assert_eq!(
             *w.render(Shell::Fish),
             "set -gx E 'e'\nset -e TOKEN\nset -gu TOKEN 't'\n"
+        );
+    }
+
+    #[test]
+    fn expanding_values_are_written_for_the_shell_to_expand() {
+        let w = fold(&[layer(
+            "/p",
+            "[common]\nenv.E = \"$HOME/a`b`\"\nvar.V = \"$V:more\"\npath.prepend = [\"$HOME/bin\", \"lit\"]\n",
+        )]);
+        assert_eq!(
+            *w.render(Shell::Bash),
+            "export E=\"${HOME-}/a\\`b\\`\"\n__pathrc_v=\"${V-}:more\"\nunset V\nV=\"$__pathrc_v\"\nunset __pathrc_v\n\
+             export PATH=\"${HOME-}/bin\":'/p/lit':\"$PATH\"\n"
+        );
+        assert_eq!(
+            *w.render(Shell::Fish),
+            "set -gx E \"$HOME\"\"/a`b`\"\nset -l __pathrc_v \"$V\"\":more\"\nset -e V\nset -gu V \"$__pathrc_v\"\n\
+             set -gx PATH \"$HOME\"\"/bin\" '/p/lit' $PATH\n"
         );
     }
 }
