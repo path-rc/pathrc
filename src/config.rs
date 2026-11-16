@@ -23,7 +23,7 @@ use crate::crypto::Plain;
 use crate::shell::Shell;
 use base64::Engine;
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Component, Path, PathBuf};
 use toml::Spanned;
 use zeroize::Zeroize;
@@ -107,6 +107,9 @@ impl Drop for Table {
 pub struct Config {
     document: Document,
     dir: PathBuf,
+    /// Where the double-quoted (TOML basic) strings start: their `$NAME`s
+    /// expand. Single-quoted (literal) strings are used as written.
+    basic: HashSet<usize>,
 }
 
 /// A variable a file sets: exported (`env`) or a shell variable (`var`).
@@ -114,6 +117,9 @@ pub struct Config {
 pub struct Var {
     pub value: String,
     pub exported: bool,
+    /// The value has `$NAME` references for the shell to expand (a
+    /// double-quoted plain value with a `$` in it).
+    pub expand: bool,
 }
 
 impl Var {
@@ -121,6 +127,7 @@ impl Var {
         Var {
             value: value.to_string(),
             exported: true,
+            expand: false,
         }
     }
 
@@ -128,6 +135,24 @@ impl Var {
         Var {
             value: value.to_string(),
             exported: false,
+            expand: false,
+        }
+    }
+}
+
+/// A `path.prepend` entry: a directory, or one with `$NAME` references
+/// still to expand. A relative entry is joined to the file's directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathEntry {
+    pub text: String,
+    pub expand: bool,
+}
+
+impl PathEntry {
+    pub fn fixed(dir: &str) -> PathEntry {
+        PathEntry {
+            text: dir.to_string(),
+            expand: false,
         }
     }
 }
@@ -141,8 +166,8 @@ pub struct Layer {
     pub unset_vars: BTreeSet<String>,
     pub unset_alias: BTreeSet<String>,
     pub vars: BTreeMap<String, Var>,
-    /// Absolute: relative entries are resolved against the file's directory.
-    pub path: Vec<PathBuf>,
+    /// Relative entries are already joined to the file's directory.
+    pub path: Vec<PathEntry>,
     pub alias: BTreeMap<String, String>,
 }
 
@@ -201,16 +226,23 @@ impl Config {
         decrypt: &mut dyn FnMut(&[u8]) -> Result<Plain, String>,
     ) -> Result<Layer, String> {
         let mut layer = Layer::default();
+        let expands = |value: &Text| {
+            self.basic.contains(&value.span().start) && value.get_ref().contains('$')
+        };
         for (table_name, table) in self.tables(shell) {
             for (name, value) in &table.env {
-                layer
-                    .vars
-                    .insert(name.get_ref().clone(), Var::env(value.get_ref()));
+                let var = Var {
+                    expand: expands(value),
+                    ..Var::env(value.get_ref())
+                };
+                layer.vars.insert(name.get_ref().clone(), var);
             }
             for (name, value) in &table.var {
-                layer
-                    .vars
-                    .insert(name.get_ref().clone(), Var::shell(value.get_ref()));
+                let var = Var {
+                    expand: expands(value),
+                    ..Var::shell(value.get_ref())
+                };
+                layer.vars.insert(name.get_ref().clone(), var);
             }
             for (name, value) in &table.alias {
                 layer
@@ -222,7 +254,18 @@ impl Config {
                 layer.path = path
                     .prepend
                     .iter()
-                    .map(|dir| resolve(&self.dir, dir.get_ref()))
+                    .map(|dir| {
+                        let expand = expands(dir);
+                        let text = dir.get_ref();
+                        // "$PROJECT/bin" is whatever $PROJECT is; "bin" and
+                        // "sub/$X" are under this file's directory.
+                        let text = if expand && text.starts_with('$') {
+                            text.clone()
+                        } else {
+                            resolve(&self.dir, text).to_string_lossy().into_owned()
+                        };
+                        PathEntry { text, expand }
+                    })
                     .collect();
             }
             let unset = &table.unset;
@@ -251,11 +294,13 @@ impl Config {
                 let text = decrypt(&bytes)
                     .and_then(decrypted_text)
                     .map_err(|e| format!("{what}: {e}"))?;
+                // A secret is used exactly as written, whatever its quotes.
                 layer.vars.insert(
                     name.get_ref().clone(),
                     Var {
                         value: text,
                         exported,
+                        expand: false,
                     },
                 );
             }
@@ -310,6 +355,10 @@ struct Checker<'a> {
     /// `.enc` values are shown decrypted (`pathrc edit`), so they are
     /// checked as text rather than as age messages.
     revealed: bool,
+    /// Where double-quoted strings start.
+    basic: HashSet<usize>,
+    /// The variables this file sets, in any table.
+    file_names: BTreeSet<String>,
 }
 
 impl Checker<'_> {
@@ -399,14 +448,49 @@ impl Checker<'_> {
         }
     }
 
+    /// A double-quoted plain value's `$`s: each must be a reference (or
+    /// `$$`), and none may refer to another name this file sets, since the
+    /// order within a file isn't the file's to choose. `own` is the name
+    /// being set: referring to its previous value is fine.
+    fn references(&mut self, own: Option<&str>, value: &Text) {
+        let start = value.span().start;
+        if !self.text[start..].starts_with('"') {
+            return;
+        }
+        self.basic.insert(start);
+        if !value.get_ref().contains('$') {
+            return;
+        }
+        match crate::expand::parse(value.get_ref()) {
+            Err(message) => self.at(start, message),
+            Ok(parts) => {
+                let clashes: Vec<String> = crate::expand::refs(&parts)
+                    .filter(|r| Some(*r) != own && self.file_names.contains(*r))
+                    .map(String::from)
+                    .collect();
+                for name in clashes {
+                    self.at(
+                        start,
+                        format!(
+                            "refers to ${name}, which this file also sets; a value can use \
+                             outer directories' variables and its own previous value"
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
     fn table(&mut self, table: &Table) {
         for (name, value) in &table.env {
             self.env_name(name, "env.");
             self.no_nul(value);
+            self.references(Some(name.get_ref()), value);
         }
         for (name, value) in &table.var {
             self.env_name(name, "var.");
             self.no_nul(value);
+            self.references(Some(name.get_ref()), value);
         }
         self.both(&table.env, &table.var);
         for name in &table.unset.var {
@@ -448,6 +532,7 @@ impl Checker<'_> {
                 self.at(dir.span().start, message);
             }
             self.no_nul(dir);
+            self.references(None, dir);
         }
     }
 }
@@ -463,6 +548,8 @@ fn check(text: &str, dir: &Path, revealed: bool) -> Result<Config, Vec<Problem>>
         text,
         problems: Vec::new(),
         revealed,
+        basic: HashSet::new(),
+        file_names: BTreeSet::new(),
     };
     let document: Document = match toml::from_str(text) {
         Ok(document) => document,
@@ -484,19 +571,31 @@ fn check(text: &str, dir: &Path, revealed: bool) -> Result<Config, Vec<Problem>>
             return Err(checker.problems);
         }
     };
-    for table in [
+    let tables = [
         &document.common,
         &document.sh,
         &document.bash,
         &document.zsh,
         &document.fish,
-    ] {
+    ];
+    for table in tables {
+        let enc = table
+            .enc
+            .iter()
+            .flat_map(|e| e.env.keys().chain(e.var.keys()));
+        let names = table.env.keys().chain(table.var.keys()).chain(enc);
+        checker
+            .file_names
+            .extend(names.map(|n| n.get_ref().clone()));
+    }
+    for table in tables {
         checker.table(table);
     }
     if checker.problems.is_empty() {
         Ok(Config {
             document,
             dir: dir.to_path_buf(),
+            basic: checker.basic,
         })
     } else {
         checker.problems.sort_by_key(|p| (p.line, p.column));
@@ -587,7 +686,10 @@ unset.all = true
         assert_eq!(l.alias, strings(&[("ll", "ls -l")]));
         assert_eq!(
             l.path,
-            vec![PathBuf::from("/proj/bin"), PathBuf::from("/opt/tool/bin")]
+            vec![
+                PathEntry::fixed("/proj/bin"),
+                PathEntry::fixed("/opt/tool/bin")
+            ]
         );
         assert_eq!(l.unset_vars, set(&["GONE"]));
         assert_eq!(l.unset_alias, set(&["old"]));
@@ -598,7 +700,7 @@ unset.all = true
     fn zsh_reads_sh_and_its_own_path_list_replaces_commons() {
         let l = layer(FILE, Shell::Zsh);
         assert_eq!(l.vars, envs(&[("A", "common"), ("B", "sh")]));
-        assert_eq!(l.path, vec![PathBuf::from("/proj/zbin")]);
+        assert_eq!(l.path, vec![PathEntry::fixed("/proj/zbin")]);
     }
 
     #[test]
@@ -623,9 +725,66 @@ unset.all = true
     }
 
     #[test]
-    fn values_are_not_expanded() {
-        let l = layer("[common]\nenv.X = \"$HOME/x\"\n", Shell::Bash);
-        assert_eq!(l.vars["X"], Var::env("$HOME/x"));
+    fn double_quoted_values_expand_and_single_quoted_ones_dont() {
+        let l = layer(
+            "[common]\nenv.D = \"$HOME/x\"\nenv.S = '$HOME/x'\nenv.P = \"plain\"\nvar.V = \"${HOME}\"\n",
+            Shell::Bash,
+        );
+        assert!(l.vars["D"].expand && l.vars["V"].expand);
+        assert!(!l.vars["S"].expand, "single quotes are used as written");
+        assert!(!l.vars["P"].expand, "no $, nothing to expand");
+        assert_eq!(l.vars["S"].value, "$HOME/x");
+    }
+
+    #[test]
+    fn a_bad_dollar_or_a_reference_to_this_files_own_names_is_an_error() {
+        let p = problems("[common]\nenv.A = \"$(id)\"\n");
+        assert!(
+            p[0].starts_with("line 2, column 9:") && p[0].contains("single quotes"),
+            "{p:?}"
+        );
+        assert!(
+            problems("[common]\nenv.A = '$(id)'\n").is_empty(),
+            "single quotes: as written"
+        );
+        let p = problems("[common]\nenv.A = \"1\"\n[bash]\nenv.B = \"$A/x\"\n");
+        assert!(
+            p[0].contains("refers to $A, which this file also sets"),
+            "{p:?}"
+        );
+        // Its own previous value, and anything set elsewhere, is fine.
+        assert!(problems("[common]\nenv.PATHS = \"$PATHS:/x\"\nvar.C = \"$OUTER\"\n").is_empty());
+        let p = problems("[common]\npath.prepend = [\"$A/bin\"]\nvar.A = \"1\"\n");
+        assert!(p[0].contains("refers to $A"), "{p:?}");
+    }
+
+    #[test]
+    fn enc_values_never_expand() {
+        let text = format!(
+            "[common.enc]\nenv.SECRET = \"{}\"\n",
+            fake_age("pa$$word$HOME")
+        );
+        let l = layer_with_secrets(&text, Shell::Bash).unwrap();
+        assert_eq!(l.vars["SECRET"], Var::env("pa$$word$HOME"));
+    }
+
+    #[test]
+    fn path_entries_keep_references_for_later() {
+        let l = layer(
+            "[common]\npath.prepend = [\"$HOME/bin\", \"sub/$X\", '$lit', \"rel\"]\n",
+            Shell::Bash,
+        );
+        let entries: Vec<(&str, bool)> =
+            l.path.iter().map(|e| (e.text.as_str(), e.expand)).collect();
+        assert_eq!(
+            entries,
+            [
+                ("$HOME/bin", true),
+                ("/proj/sub/$X", true),
+                ("/proj/$lit", false),
+                ("/proj/rel", false)
+            ]
+        );
     }
 
     fn problems(text: &str) -> Vec<String> {

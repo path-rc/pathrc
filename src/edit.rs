@@ -36,8 +36,9 @@ const NEW_FILE: &str = "\
 # pathrc:   unset.all = true          ignore what outer files set
 # pathrc: [common.enc] and the like hold env and var values that are kept
 # pathrc: encrypted: type them here in plain text and they are encrypted when
-# pathrc: you save (or add one with `pathrc secret NAME`). Values are strings,
-# pathrc: used as written. These lines are removed when you save.
+# pathrc: you save (or add one with `pathrc secret NAME`). Values are strings:
+# pathrc: \"$HOME/x\" expands $NAME, '$HOME/x' is used exactly as written, and
+# pathrc: .enc values never expand. These lines are removed when you save.
 ";
 
 const SECRETS_NOTE: &str = "\

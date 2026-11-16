@@ -469,7 +469,8 @@ pub fn merge(
                         let sealed = Zeroizing::new(seal(value)?);
                         put(t, kind, name, &sealed)?;
                     } else {
-                        put(t, kind, name, value)?;
+                        // Old values were used as written: keep a $ a $.
+                        put(t, kind, name, &value.replace('$', "$$"))?;
                     }
                     count += 1;
                 }
@@ -489,7 +490,7 @@ pub fn merge(
             }
             if !s.path.is_empty() {
                 let path = sub_table(t, "path", Make::Dotted)?;
-                let array: Array = s.path.iter().map(|d| d.as_str()).collect();
+                let array: Array = s.path.iter().map(|d| d.replace('$', "$$")).collect();
                 path.insert("prepend", Item::Value(Value::Array(array)));
                 count += s.path.len();
             }
@@ -778,5 +779,25 @@ export PATH=$PATH:/after
         )
         .unwrap_err();
         assert!(error.contains("[common] env.KEEP"), "{error}");
+    }
+
+    #[test]
+    fn a_literal_dollar_stays_literal() {
+        let old = from_shell("export PRICE='$5 a $HOME'\nalias h='echo $HOME'\n").unwrap();
+        let (text, _) = merge("", &[(old, false)], &mut |v| Ok(v.into())).unwrap();
+        assert!(text.contains("env.PRICE = \"$$5 a $$HOME\""), "{text}");
+        assert!(
+            text.contains("alias.h = \"echo $HOME\""),
+            "aliases aren't expanded: {text}"
+        );
+        let config = crate::config::parse(&text, std::path::Path::new("/"))
+            .ok()
+            .unwrap();
+        let layer = config
+            .layer(crate::shell::Shell::Bash, &mut |_| Err("none".into()))
+            .unwrap();
+        let rendered =
+            crate::settings::set_var("PRICE", &layer.vars["PRICE"], crate::shell::Shell::Bash);
+        assert_eq!(rendered, "export PRICE=\"\\$5 a \\$HOME\"\n");
     }
 }

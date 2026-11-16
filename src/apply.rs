@@ -18,7 +18,7 @@ use crate::quote::quote;
 use crate::settings::{set_alias, set_var, unset_alias, unset_var};
 use crate::shell::Shell;
 use crate::state::{self, Entry, Level};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use zeroize::Zeroizing;
 
 pub struct Emitter {
@@ -27,6 +27,12 @@ pub struct Emitter {
     exported: HashSet<String>,
     path: Vec<String>,
     path_changed: bool,
+    /// Values this run has set (`Some`) or unset (`None`), for expanding
+    /// `path.prepend` entries; anything else comes from the environment.
+    known: HashMap<String, Option<Zeroizing<String>>>,
+    /// Names whose values this run can't tell: restored by leaving a
+    /// level, or set by an expanding value only the shell works out.
+    unknown: HashSet<String>,
 }
 
 impl Emitter {
@@ -51,7 +57,37 @@ impl Emitter {
                 .map(String::from)
                 .collect(),
             path_changed: false,
+            known: HashMap::new(),
+            unknown: HashSet::new(),
         }
+    }
+
+    /// A variable's value now, for a `path.prepend` entry.
+    fn value_of(&self, name: &str) -> Result<String, String> {
+        if let Some(value) = self.known.get(name) {
+            return value
+                .as_ref()
+                .map(|v| v.to_string())
+                .ok_or_else(|| format!("refers to ${name}, which isn't set"));
+        }
+        if self.unknown.contains(name) {
+            return Err(format!(
+                "refers to ${name}, whose value pathrc can't tell here; write the directory out"
+            ));
+        }
+        std::env::var(name)
+            .map_err(|_| format!("refers to ${name}, which isn't set (or isn't exported)"))
+    }
+
+    fn set_known(&mut self, name: &str, value: Option<String>) {
+        self.unknown.remove(name);
+        self.known
+            .insert(name.to_string(), value.map(Zeroizing::new));
+    }
+
+    fn forget(&mut self, name: &str) {
+        self.known.remove(name);
+        self.unknown.insert(name.to_string());
     }
 
     fn call(&mut self, function: &str, slot: &str, name: &str) {
@@ -91,12 +127,48 @@ impl Emitter {
 
     /// Enters the file `entry` as level `index`, applying `layer` on top of
     /// the `outer` levels, and returns what it did.
-    pub fn enter(&mut self, index: usize, entry: &Entry, layer: &Layer, outer: &[Level]) -> Level {
+    /// Fails, having printed nothing, when a `path.prepend` entry can't be
+    /// expanded.
+    pub fn enter(
+        &mut self,
+        index: usize,
+        entry: &Entry,
+        layer: &Layer,
+        outer: &[Level],
+    ) -> Result<Level, String> {
         let shell = self.shell;
         let mut level = Level {
             entry: entry.clone(),
             ..Level::default()
         };
+        // PATH entries first, as they'll be once this level's unsets are
+        // applied (a file can't refer to names it sets itself).
+        let unset_here = |name: &str| {
+            layer.unset_vars.contains(name)
+                || (layer.unset_all && outer.iter().any(|o| o.vars.iter().any(|(n, _)| n == name)))
+        };
+        let mut added = Vec::new();
+        for entry in &layer.path {
+            if !entry.expand {
+                added.push(entry.text.clone());
+                continue;
+            }
+            let parts = crate::expand::parse(&entry.text)?;
+            let dir = crate::expand::substitute(&parts, &mut |name| {
+                if unset_here(name) {
+                    return Err(format!("refers to ${name}, which this file unsets"));
+                }
+                self.value_of(name)
+            })
+            .map_err(|e| format!("path.prepend \"{}\" {e}", entry.text))?;
+            if dir.is_empty() || dir.contains(':') {
+                return Err(format!(
+                    "path.prepend \"{}\" expands to '{dir}', which isn't one directory",
+                    entry.text
+                ));
+            }
+            added.push(dir);
+        }
         if layer.unset_all {
             // Everything the outer levels set: their values come back when
             // this level is left.
@@ -105,6 +177,7 @@ impl Emitter {
                     self.save_var(index, &mut level, name);
                     self.out.push_str(&unset_var(name, shell));
                     self.exported.remove(name);
+                    self.set_known(name, None);
                 }
                 for name in &outer_level.aliases {
                     self.save_alias(index, &mut level, name);
@@ -121,6 +194,7 @@ impl Emitter {
             self.save_var(index, &mut level, name);
             self.out.push_str(&unset_var(name, shell));
             self.exported.remove(name);
+            self.set_known(name, None);
         }
         for name in &layer.unset_alias {
             self.save_alias(index, &mut level, name);
@@ -134,13 +208,14 @@ impl Emitter {
             } else {
                 self.exported.remove(name);
             }
+            if var.expand {
+                // Only the shell knows what it expands to.
+                self.forget(name);
+            } else {
+                self.set_known(name, Some(var.value.clone()));
+            }
         }
-        if !layer.path.is_empty() {
-            let added: Vec<String> = layer
-                .path
-                .iter()
-                .map(|dir| dir.to_string_lossy().into_owned())
-                .collect();
+        if !added.is_empty() {
             let mut path = added.clone();
             path.append(&mut self.path);
             self.path = path;
@@ -151,7 +226,7 @@ impl Emitter {
             self.save_alias(index, &mut level, name);
             self.out.push_str(&set_alias(name, value, shell));
         }
-        level
+        Ok(level)
     }
 
     /// Leaves level `index`: restores what it saved, puts back the outer
@@ -167,6 +242,7 @@ impl Emitter {
             } else {
                 self.exported.remove(name);
             }
+            self.forget(name);
         }
         for (n, name) in level.aliases.iter().enumerate().rev() {
             self.call("__pathrc_arestore", &format!("{index}_{n}"), name);
@@ -208,7 +284,6 @@ impl Emitter {
 mod tests {
     use super::*;
     use crate::config::Var;
-    use std::path::PathBuf;
 
     fn layer() -> Layer {
         Layer::default()
@@ -227,7 +302,7 @@ mod tests {
         l.unset_vars.insert("REGION".into());
         l.alias.insert("tfp".into(), "terraform plan".into());
         let mut e = emitter(&["REGION"]);
-        let level = e.enter(0, &"h /p".to_string(), &l, &[]);
+        let level = e.enter(0, &"h /p".to_string(), &l, &[]).unwrap();
         assert_eq!(
             level.vars,
             vec![("REGION".to_string(), true), ("TOKEN".to_string(), false)]
@@ -266,9 +341,9 @@ mod tests {
     #[test]
     fn path_entries_go_in_front_and_only_ours_come_out() {
         let mut l = layer();
-        l.path = vec![PathBuf::from("/p/bin")];
+        l.path = vec![crate::config::PathEntry::fixed("/p/bin")];
         let mut e = Emitter::new(Shell::Bash, HashSet::new(), "/usr/bin:/bin");
-        let level = e.enter(0, &"h /p".to_string(), &l, &[]);
+        let level = e.enter(0, &"h /p".to_string(), &l, &[]).unwrap();
         assert_eq!(e.path, ["/p/bin", "/usr/bin", "/bin"]);
         // The user puts /mine in front meanwhile; leaving keeps it.
         let mut e = Emitter::new(Shell::Bash, HashSet::new(), "/mine:/p/bin:/usr/bin:/bin");
@@ -291,7 +366,9 @@ mod tests {
         let mut l = layer();
         l.unset_all = true;
         let mut e = Emitter::new(Shell::Bash, ["REGION".to_string()].into(), "/p/bin:/bin");
-        let level = e.enter(1, &"h2 /p/s".to_string(), &l, std::slice::from_ref(&outer));
+        let level = e
+            .enter(1, &"h2 /p/s".to_string(), &l, std::slice::from_ref(&outer))
+            .unwrap();
         assert_eq!(level.vars, vec![("REGION".to_string(), true)]);
         assert_eq!(level.path_dropped, vec!["/p/bin".to_string()]);
         assert_eq!(e.path, ["/bin"]);
@@ -304,5 +381,49 @@ mod tests {
     fn fish_state_is_a_global() {
         let e = Emitter::new(Shell::Fish, HashSet::new(), "/bin");
         assert_eq!(*e.finish(&[]), "set -g __pathrc_state 'pathrc-state 1\n'\n");
+    }
+
+    #[test]
+    fn path_references_expand_from_the_environment_and_this_run() {
+        let mut outer = layer();
+        outer.vars.insert("PROJECT".into(), Var::env("/work/p"));
+        let mut inner = layer();
+        inner.path = vec![
+            crate::config::PathEntry {
+                text: "$PROJECT/bin".into(),
+                expand: true,
+            },
+            crate::config::PathEntry {
+                text: "$HOME/bin".into(),
+                expand: true,
+            },
+        ];
+        let mut e = Emitter::new(Shell::Bash, HashSet::new(), "/bin");
+        let first = e.enter(0, &"h1 /w".to_string(), &outer, &[]).unwrap();
+        e.enter(1, &"h2 /w/s".to_string(), &inner, &[first])
+            .unwrap();
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(
+            e.path,
+            [
+                "/work/p/bin".to_string(),
+                format!("{home}/bin"),
+                "/bin".into()
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unknown_path_reference_fails_before_anything_is_printed() {
+        let mut l = layer();
+        l.vars.insert("A".into(), Var::env("a"));
+        l.path = vec![crate::config::PathEntry {
+            text: "$PATHRC_TEST_SURELY_UNSET/bin".into(),
+            expand: true,
+        }];
+        let mut e = Emitter::new(Shell::Bash, HashSet::new(), "/bin");
+        let error = e.enter(0, &"h /p".to_string(), &l, &[]).unwrap_err();
+        assert!(error.contains("isn't set"), "{error}");
+        assert_eq!(*e.finish(&[]), "__pathrc_state='pathrc-state 1\n'\n");
     }
 }
